@@ -35,6 +35,51 @@ test('站点模拟：片单响应不能清掉存档404，预览地址不可访�
   expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBeNull();
 });
 
+for (const status of ['ready', 'pending', 'ended'] as const) {
+  test(`站点模拟：${status}完整回看与物证只读`, async ({ page }, testInfo) => {
+    const view: PlayerView = structuredClone(status === 'ended' ? previewViews.ended : previewViews.consent);
+    view.status = status;
+    view.visibleEvents.push(...Array.from({ length: 9 }, (_, index) => ({ ...view.visibleEvents[0], eventId: `history-${index}`, stage: [3, 2, 3][index % 3], text: `已发生的可见记录 ${index + 1}` })));
+    if (status === 'pending') {
+      view.choices = [];
+      view.activeRequest = { requestId: 'pending-with-clues', actionId: 'lend_laptop', label: '把电脑交给她编辑', startedAt: Date.now(), allowFallback: true };
+    }
+    const writes: string[] = [];
+    await page.route(api, async route => {
+      if (route.request().method() !== 'GET') writes.push(route.request().method());
+      if (route.request().url().endsWith('/episodes')) await route.fulfill({ json: episodes });
+      else if (route.request().url().includes('/turns/')) await route.fulfill({ status: 202, json: { requestId: view.activeRequest!.requestId, status: 'pending', pollUrl: '' } });
+      else await route.fulfill({ json: view });
+    });
+    await page.goto(`${origin}/#/play/${view.runId}/${view.branchId}`);
+    const clues = page.getByRole('button', { name: `已获物证 ${view.inventory.length}` });
+    await expect(clues).toBeEnabled();
+    await clues.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('dialog .clue-card h3')).toHaveText(view.inventory.map(clue => clue.title));
+    await expect(page.locator('dialog .clue-card p')).toHaveText(view.inventory.map(clue => clue.text));
+    await page.keyboard.press('Escape');
+    await expect(page.locator('dialog')).toHaveCount(0);
+    await expect(page.locator('.dialogue-line p')).toHaveText(view.visibleEvents.map(event => event.text));
+    await clues.focus();
+    await page.keyboard.press('Tab');
+    const log = page.getByRole('log');
+    await expect(log).toBeFocused();
+    await page.keyboard.press('Home');
+    await expect.poll(() => log.evaluate(element => element.scrollTop)).toBe(0);
+    await expect(page.locator('.dialogue-line p').first()).toBeInViewport();
+    await page.keyboard.press('End');
+    await expect(page.locator('.dialogue-line p').last()).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath('replay-and-clues.png'), fullPage: true });
+    const saved = await page.evaluate(() => localStorage.getItem('retake.progress.site'));
+    await page.reload();
+    await expect(page.locator('.dialogue-line p')).toHaveText(view.visibleEvents.map(event => event.text));
+    expect(await page.evaluate(() => localStorage.getItem('retake.progress.site'))).toBe(saved);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(writes).toEqual([]);
+  });
+}
+
 for (const status of [404, 409, 503]) {
   for (const entry of ['episode/wedding', 'play/old-run/old-branch']) {
     test(`站点模拟：${entry}恢复${status}后显式另开，不删除旧存档`, async ({ page }, testInfo) => {

@@ -149,6 +149,48 @@ test('猫样本不匹配可重录，自由姿态与静音不依赖麦克风', as
   await expect(page.locator('.fictional-comments')).toContainText('默默删掉了草稿');
 });
 
+test('猫回环后完整对白可回看，倒带与旧线各保留自己的记录', async ({ page }) => {
+  await page.goto('/#/episode/hiss');
+  await expect(page.locator('[data-action="step_back"]')).toBeEnabled();
+  const opening = await page.locator('.dialogue-line p').allTextContents();
+  await page.locator('[data-action="step_back"]').click();
+  await expect(page.locator('[data-action="bind_back"]')).toBeEnabled();
+  await page.getByRole('combobox').selectOption('player_word');
+  for (let loop = 0; loop < 2; loop++) {
+    await page.locator('[data-action="bind_back"]').click();
+    await expect(page.locator('[data-action="bow"]')).toBeEnabled();
+    await page.locator('[data-action="bow"]').click();
+    await expect(page.locator('[data-action="bind_back"]')).toBeEnabled();
+  }
+  await page.getByRole('combobox').selectOption('cat_hiss');
+  await page.locator('[data-action="bind_back"]').click();
+  await expect(page.locator('[data-action="bow"]')).toBeEnabled();
+  await page.locator('[data-action="bow"]').click();
+  await expect(page.locator('.scene-title h1')).toHaveText('我先哈一步');
+  const oldRoute = page.url();
+  const saved = await page.evaluate(() => localStorage.getItem('retake.authored.v1'));
+  const expected = await page.evaluate(() => {
+    const [, , runId, branchId] = location.hash.split('/');
+    const data = JSON.parse(localStorage.getItem('retake.authored.v1')!);
+    return data.store.runs[runId].branches[branchId].state.visibleEvents.map((event: { text: string }) => event.text) as string[];
+  });
+  expect(expected.length).toBeGreaterThan(8);
+  expect(expected.slice(0, opening.length)).toEqual(opening);
+  await expect(page.locator('.dialogue-line p')).toHaveText(expected);
+  await page.getByRole('button', { name: /^已获物证/ }).click();
+  await expect(page.locator('dialog')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await expect(page.locator('.dialogue-line p')).toHaveText(expected);
+  expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBe(saved);
+  await page.getByRole('button', { name: '倒回去，换个演法' }).click();
+  await page.locator('.rewind-list').first().getByRole('button').first().click();
+  await expect(page.locator('[data-action="step_back"]')).toBeEnabled();
+  await expect(page.locator('.dialogue-line p')).toHaveText(opening);
+  await page.goto(oldRoute);
+  await expect(page.locator('.dialogue-line p')).toHaveText(expected);
+});
+
 test('双窗切换不耗回合，草稿可发给明确收件人', async ({ page }) => {
   await page.goto('/#/episode/romance');
   await expect(page.locator('[data-action="open_chats"]')).toBeEnabled();
