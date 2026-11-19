@@ -175,6 +175,87 @@ test('站点模拟：引用草稿只认当前可见楼层，取消零写入、�
   expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBeNull();
 });
 
+for (const channel of ['soda', 'coach']) {
+  test(`站点模拟：转发${channel}原文预览、取消和断网原请求重试`, async ({ page }, testInfo) => {
+    const original = { ...previewViews.ready.visibleEvents[0], eventId: `forward-${channel}`, actorId: 'soda', actorName: channel === 'soda' ? '汽水' : '退堂鼓', channel, text: '<b>今天 21:10 · 只确认转发这一条</b>' };
+    const ready: PlayerView = { ...structuredClone(previewViews.ready), episodeId: 'romance', presentation: { friendForwardPreviewEventId: original.eventId }, choices: [{ actionId: 'ask_friend', label: '把已预览的一段转给阿圆', control: 'message', targets: [{ id: 'friend', label: '阿圆 · 私聊', channel: 'friend' }] }], visibleEvents: [original, { ...original, eventId: 'not-forwarded', text: '另一窗不可一起转发', channel: channel === 'soda' ? 'coach' : 'soda' }], inventory: [{ id: 'draft', title: '未发送草稿', text: '未发送草稿不可一起转发' }] };
+    let current = ready;
+    const inputs: TurnInput[] = [];
+    await page.route(api, async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith('/episodes')) return route.fulfill({ json: episodes });
+      if (path.endsWith('/turns')) {
+        inputs.push(route.request().postDataJSON());
+        if (inputs.length === 1) return route.abort('internetdisconnected');
+        current = { ...ready, revision: 1, stage: 2, choices: [{ actionId: 'compare_thursday', label: '对照星期四', control: 'button' }] };
+      }
+      return route.fulfill({ json: current });
+    });
+    await page.goto(`${origin}/#/play/${ready.runId}/${ready.branchId}`);
+    await page.locator('[data-action="ask_friend"]').click();
+    const draft = page.getByRole('dialog', { name: '确认转发给阿圆' });
+    await expect(draft).toBeVisible();
+    await expect(draft.locator('.forward-preview p')).toHaveText(original.text);
+    await expect(draft.locator('.forward-preview p b')).toHaveCount(0);
+    await expect(draft.locator('.forward-preview')).toContainText(original.actorName);
+    await expect(draft.locator('.forward-preview')).toContainText(channel === 'soda' ? '汽水窗口' : '退堂鼓窗口');
+    await expect(draft).not.toContainText('另一窗不可一起转发');
+    await expect(draft).not.toContainText('未发送草稿不可一起转发');
+    await expect(draft).toContainText('不包含其他窗口或未发送草稿');
+    await expect(draft.locator('[data-confirm-forward]')).toBeEnabled();
+    expect(inputs).toEqual([]);
+    await draft.getByLabel('给阿圆的附言（可选）').fill('放弃的附言');
+    await draft.getByRole('button', { name: '取消转发' }).click();
+    expect(inputs).toEqual([]);
+    await page.locator('.choice-wrap').filter({ has: page.locator('[data-action="ask_friend"]') }).getByRole('button', { name: '换一句自己的话' }).click();
+    await expect(draft.getByLabel('给阿圆的附言（可选）')).toHaveValue('');
+    await expect(draft.getByLabel('给阿圆的附言（可选）')).toHaveAttribute('maxlength', '80');
+    await page.keyboard.press('Escape');
+    expect(inputs).toEqual([]);
+    await page.locator('[data-action="ask_friend"]').click();
+    await draft.getByLabel('给阿圆的附言（可选）').fill('  <i>只问这一句</i>  ');
+    await page.screenshot({ path: testInfo.outputPath('forward-preview.png') });
+    await draft.locator('[data-confirm-forward]').click();
+    await expect(page.getByRole('alert')).toContainText('网络');
+    await expect(page.locator('.submission-text')).toHaveText('<i>只问这一句</i>');
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].params).toEqual({ forwardEventId: original.eventId, target: 'friend', channel: 'friend', text: '<i>只问这一句</i>' });
+    await page.getByRole('button', { name: '重试原操作' }).click();
+    await expect(page.locator('[data-action="compare_thursday"]')).toBeEnabled();
+    expect(inputs).toHaveLength(2);
+    expect(inputs[1]).toEqual(inputs[0]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBeNull();
+  });
+}
+
+for (const invalid of ['missing', 'unknown', 'actor', 'channel', 'audience', 'recipient']) {
+  test(`站点模拟：转发拒绝${invalid}预览引用`, async ({ page }) => {
+    const original = { ...previewViews.ready.visibleEvents[0], eventId: 'forward-reference', actorId: 'soda', actorName: '汽水', channel: 'soda', text: '不合要求的转发原文' };
+    const ready: PlayerView = { ...structuredClone(previewViews.ready), episodeId: 'romance', presentation: { friendForwardPreviewEventId: original.eventId }, choices: [{ actionId: 'ask_friend', label: '把已预览的一段转给阿圆', control: 'message', targets: [{ id: 'friend', label: '阿圆 · 私聊', channel: 'friend' }] }], visibleEvents: [original] };
+    if (invalid === 'missing') delete ready.presentation.friendForwardPreviewEventId;
+    if (invalid === 'unknown') ready.presentation.friendForwardPreviewEventId = 'not-in-this-view';
+    if (invalid === 'actor') original.actorId = 'player';
+    if (invalid === 'channel') original.channel = 'draft';
+    if (invalid === 'audience') original.audience = ['soda'];
+    if (invalid === 'recipient') ready.choices[0].targets![0] = { id: 'soda', label: '汽水', channel: 'soda' };
+    const writes: string[] = [];
+    await page.route(api, route => {
+      if (route.request().method() !== 'GET') writes.push(route.request().url());
+      return route.fulfill({ json: route.request().url().endsWith('/episodes') ? episodes : ready });
+    });
+    await page.goto(`${origin}/#/play/${ready.runId}/${ready.branchId}`);
+    await page.locator('[data-action="ask_friend"]').click();
+    const draft = page.getByRole('dialog', { name: '确认转发给阿圆' });
+    await expect(draft.getByRole('alert')).toContainText('暂不能确认转发');
+    await expect(draft.locator('[data-confirm-forward]')).toBeDisabled();
+    await expect(draft.locator('.forward-preview')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    expect(writes).toEqual([]);
+    expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBeNull();
+  });
+}
+
 test('站点模拟：首拍旧线入口和对照只读取，不生成回合或分支', async ({ page }) => {
   const ready = structuredClone(previewViews.ready);
   const old = { ...structuredClone(previewViews.ended), runId: ready.runId, branchId: 'old-ended-line' };

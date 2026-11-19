@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 import acceptance from '../../五剧十五结局-验收样例.json' with { type: 'json' };
+import type { AuthoredStore } from '../../fixtures/authored-engine';
+import type { TurnInput } from '../../shared/contracts';
 
 for (const scenario of acceptance.cases) {
   test(`作者预演 ${scenario.caseId}: ${scenario.expected.title}`, async ({ page }) => {
@@ -18,6 +20,12 @@ for (const scenario of acceptance.cases) {
       if (scenario.episodeId === 'reply' && /^(quote_|reply_)/.test(turn.actionId)) {
         await expect(page.getByRole('dialog', { name: '确认引用这条消息' })).toBeVisible();
         const confirm = page.locator('button[data-confirm-quote]');
+        await expect(confirm).toBeEnabled();
+        await confirm.click();
+      }
+      if (turn.actionId === 'ask_friend') {
+        await expect(page.getByRole('dialog', { name: '确认转发给阿圆' })).toBeVisible();
+        const confirm = page.locator('button[data-confirm-forward]');
         await expect(confirm).toBeEnabled();
         await confirm.click();
       }
@@ -94,6 +102,10 @@ for (const episodeId of ['wedding', 'office', 'romance', 'hiss', 'reply']) {
       if (episodeId === 'reply' && /^(quote_|reply_)/.test(turn.actionId)) {
         await expect(page.getByRole('dialog', { name: '确认引用这条消息' })).toBeVisible();
         await activate('button[data-confirm-quote]');
+      }
+      if (turn.actionId === 'ask_friend') {
+        await expect(page.getByRole('dialog', { name: '确认转发给阿圆' })).toBeVisible();
+        await activate('button[data-confirm-forward]');
       }
     }
     await expect(page.locator('.scene-title h1')).toHaveText(scenario.expected.title);
@@ -313,6 +325,139 @@ test('猫回环后完整对白可回看，倒带与旧线各保留自己的记�
   await expect(page.locator('.dialogue-line p')).toHaveText(opening);
   await page.goto(oldRoute);
   await expect(page.locator('.dialogue-line p')).toHaveText(expected);
+});
+
+test('阿圆转发先预览，取消与Escape不落盘，键盘确认只交付一条历史和附言', async ({ page }, testInfo) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width: 360, height: 780 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/#/episode/romance');
+  await expect(page.locator('.mode-pill')).toHaveText('编剧预写 · 本机存档');
+  await expect(page.locator('[data-action="ask_friend"]')).toBeEnabled();
+  await expect(page).toHaveURL(/#\/play\/[^/]+\/[^/]+$/);
+  await expect(page.getByLabel('开启声音')).toBeVisible();
+
+  async function readSave() {
+    return page.evaluate(() => {
+      const saved = localStorage.getItem('retake.authored.v1')!;
+      const [, , runId, branchId] = location.hash.split('/');
+      const { store } = JSON.parse(saved) as { store: AuthoredStore };
+      const branch = store.runs[runId].branches[branchId];
+      return { saved, state: branch.state, inputs: Object.values(branch.requests).map(request => JSON.parse(request.fingerprint) as TurnInput) };
+    });
+  }
+  async function activate(selector: string) {
+    const button = page.locator(selector);
+    await expect(button).toBeEnabled();
+    for (let tabs = 0; tabs < 40 && !await button.evaluate(element => element === document.activeElement); tabs++) {
+      await page.keyboard.press('Tab');
+    }
+    await expect(button).toBeFocused();
+    await page.keyboard.press('Enter');
+  }
+  const opening = await readSave();
+  expect(opening.state.episodeId).toBe('romance');
+  expect(opening.state.revision).toBe(0);
+  const original = opening.state.visibleEvents.find(event => event.eventId === opening.state.presentation.friendForwardPreviewEventId
+    && event.actorId === 'soda' && event.audience.includes('player') && ['soda', 'coach'].includes(event.channel))!;
+  expect(original, '预览必须引用本局真实开场投影中的消息，不使用模板事件ID').toBeDefined();
+  const dialog = page.getByRole('dialog', { name: '确认转发给阿圆' });
+  const note = dialog.getByLabel('给阿圆的附言（可选）', { exact: true });
+  const confirm = dialog.locator('button[data-confirm-forward]');
+  async function expectPreview() {
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveJSProperty('tagName', 'DIALOG');
+    await expect(dialog).toHaveAttribute('open', '');
+    await expect(dialog.locator('.forward-preview p')).toHaveText(original.text);
+    await expect(dialog.locator('.forward-preview p *')).toHaveCount(0);
+    await expect(dialog.locator('.forward-preview')).toContainText(original.actorName);
+    await expect(dialog.locator('.forward-preview')).toContainText(original.channel === 'soda' ? '汽水窗口' : '退堂鼓窗口');
+    await expect(dialog).toContainText(/转发给阿圆\s*·\s*私聊/);
+    await expect(dialog).toContainText(/只.*这一条.*历史.*附言/);
+    await expect(dialog).toContainText(/不(?:含|包含|会转发).*其他窗.*未发送草稿/);
+    await expect(dialog.getByRole('combobox')).toHaveCount(0);
+    await expect(note).toHaveJSProperty('tagName', 'TEXTAREA');
+    await expect(note).toHaveAttribute('maxlength', '80');
+    await expect(note).toHaveValue('');
+    await expect(confirm).toHaveText('确认转发给阿圆');
+    await expect(confirm).toBeEnabled();
+    expect((await readSave()).saved).toBe(opening.saved);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+
+  const cancelledNote = '这段附言取消，不要发送。';
+  await page.locator('[data-action="ask_friend"]').click();
+  await expectPreview();
+  await note.fill(cancelledNote);
+  expect((await readSave()).saved).toBe(opening.saved);
+  await dialog.getByRole('button', { name: '取消转发', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect((await readSave()).saved).toBe(opening.saved);
+
+  const escapedNote = '这段附言按Escape放弃。';
+  await page.locator('.choice-wrap').filter({ has: page.locator('[data-action="ask_friend"]') }).locator('.say-button').click();
+  await expectPreview();
+  await note.fill(escapedNote);
+  expect((await readSave()).saved).toBe(opening.saved);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  expect((await readSave()).saved).toBe(opening.saved);
+
+  await activate('[data-action="ask_friend"]');
+  await expectPreview();
+  const sentNote = '  阿圆，只帮我看看这一条，不用替我回复。  ';
+  await note.fill(sentNote);
+  expect((await readSave()).saved).toBe(opening.saved);
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await page.screenshot({ path: process.env.CAPTURE_EVIDENCE ? 'docs/evidence/romance-forward.png' : testInfo.outputPath('romance-forward.png') });
+  await activate('button[data-confirm-forward]');
+  await expect(dialog).toBeHidden();
+  await expect(page.locator('[data-action="compare_thursday"]')).toBeEnabled();
+  const afterForward = await readSave();
+  expect(afterForward.inputs).toHaveLength(1);
+  expect(afterForward.inputs[0].actionId).toBe('ask_friend');
+  expect(afterForward.inputs[0].params).toEqual({ forwardEventId: original.eventId, target: 'friend', channel: 'friend', text: sentNote.trim() });
+  const forwarded = afterForward.state.visibleEvents.filter(event => event.kind === 'message_forwarded');
+  expect(forwarded).toHaveLength(1);
+  expect(forwarded[0].text).toBe(`转发预览已确认：${original.text}\n附言：${sentNote.trim()}`);
+  expect(forwarded[0].causeIds).toContain(original.eventId);
+  expect(forwarded[0].audience).toEqual(['player', 'friend']);
+  expect(forwarded[0].channel).toBe('friend');
+  expect(afterForward.state.presentation.friendReceivedEventId).toBe(forwarded[0].eventId);
+  const friendEvents = afterForward.state.visibleEvents.filter(event => event.audience.includes('friend'));
+  expect(friendEvents.map(event => event.kind)).toEqual(['message_forwarded', 'dialogue']);
+  expect(friendEvents[0]).toEqual(forwarded[0]);
+  expect(friendEvents[1].actorId).toBe('friend');
+  expect(friendEvents[1].channel).toBe('friend');
+  expect(friendEvents[1].audience).toEqual(['player', 'friend']);
+  expect(friendEvents[1].causeIds).toEqual([forwarded[0].eventId]);
+  await expect(page.locator('.dialogue-line p').filter({ hasText: forwarded[0].text })).toHaveCount(1);
+
+  for (const action of ['compare_thursday', 'disclose_forwarding']) await activate(`[data-action="${action}"]`);
+  await expect(page.locator('.scene-title h1')).toHaveText('已读，明天再回');
+  await expect(page.locator('.scene-title')).toContainText('汽水说明认出日期，两人暂停见面');
+  await expect(page.locator('.ending-change-text')).toHaveText(forwarded[0].text);
+  const ended = await readSave();
+  expect(ended.state.ending?.id).toBe('romance.tomorrow');
+  expect(ended.state.visibleEvents.filter(event => event.audience.includes('friend'))).toEqual(friendEvents);
+  const friendText = friendEvents.map(event => event.text).join('\n');
+  const windowEvents = ended.state.visibleEvents.filter(event => ['soda', 'coach'].includes(event.channel));
+  expect(windowEvents.some(event => event.channel !== original.channel)).toBe(true);
+  for (const event of windowEvents) {
+    expect(event.audience).not.toContain('friend');
+    if (event.eventId !== original.eventId) expect(friendText).not.toContain(event.text);
+  }
+  for (const draft of [cancelledNote, escapedNote, '见。想吃烤肉。']) expect(friendText).not.toContain(draft);
+  expect(ended.state.visibleEvents.filter(event => event.kind === 'message_forwarded')).toEqual(forwarded);
+  await page.reload();
+  await expect(page.locator('.scene-title h1')).toHaveText('已读，明天再回');
+  await expect(page.locator('.ending-change-text')).toHaveText(forwarded[0].text);
+  await expect(page.locator('.dialogue-line p').filter({ hasText: forwarded[0].text })).toHaveCount(1);
+  expect((await readSave()).saved).toBe(ended.saved);
+  await expect(page.getByLabel('开启声音')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(errors).toEqual([]);
 });
 
 test('双窗切换不耗回合，草稿可发给明确收件人', async ({ page }) => {

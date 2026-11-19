@@ -45,6 +45,18 @@ for (const episodeId of ['wedding', 'office', 'romance', 'hiss', 'reply']) {
         await expect(page.getByRole('dialog', { name: '确认引用这条消息' })).toBeVisible();
         await activate('button[data-confirm-quote]');
       }
+      if (turn.actionId === 'ask_friend') {
+        const preview = page.getByRole('dialog', { name: '确认转发给阿圆' });
+        await expect(preview).toBeVisible();
+        const current = await readView(page);
+        const original = current.visibleEvents.find(event => event.eventId === current.presentation.friendForwardPreviewEventId
+          && event.actorId === 'soda' && event.audience.includes('player') && ['soda', 'coach'].includes(event.channel));
+        expect(original, '转发预览必须引用当前真实玩家视图中可见的汽水历史消息').toBeDefined();
+        await expect(preview.locator('.forward-preview p')).toHaveText(original!.text);
+        await expect(preview.locator('.forward-preview')).toContainText(original!.actorName);
+        await expect(preview.locator('.forward-preview')).toContainText(original!.channel === 'soda' ? '汽水窗口' : '退堂鼓窗口');
+        await activate('button[data-confirm-forward]');
+      }
     }
     await expect(page.locator('.ending-panel')).toBeVisible({ timeout: 30000 });
     const ended = await readView(page);
