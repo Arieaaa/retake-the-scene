@@ -8,7 +8,10 @@ for (const scenario of acceptance.cases) {
     await page.goto('/');
     await expect(page.locator('.poster-card')).toHaveCount(5);
     await page.locator(`[data-episode="${scenario.episodeId}"]`).click();
-    for (const turn of scenario.turns) {
+    await expect(page.locator('.action-panel')).toBeVisible();
+    const openingCount = await page.locator('.dialogue-line').count();
+    let firstChangeText = '';
+    for (const [index, turn] of scenario.turns.entries()) {
       const choice = page.locator(`[data-action="${turn.actionId}"]`);
       await expect(choice).toBeEnabled();
       await choice.click();
@@ -18,7 +21,13 @@ for (const scenario of acceptance.cases) {
         await expect(confirm).toBeEnabled();
         await confirm.click();
       }
+      if (index === 0) {
+        await expect(page.locator('.action-panel')).toBeVisible();
+        firstChangeText = await page.locator('.dialogue-line p').nth(openingCount + (scenario.episodeId === 'hiss' ? 0 : 1)).innerText();
+      }
     }
+    await expect(page.locator('.scene-title .last-line')).toBeFocused();
+    await expect(page.locator('.ending-change-text')).toHaveText(firstChangeText);
     await expect(page.locator('.scene-title h1')).toHaveText(scenario.expected.title);
     await expect(page.locator('.scene-title')).toContainText(scenario.expected.visibleResult);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -57,6 +66,7 @@ for (const scenario of acceptance.cases) {
     }
     await page.reload();
     await expect(page.locator('.scene-title h1')).toHaveText(scenario.expected.title);
+    await expect(page.locator('.ending-change-text')).toHaveText(firstChangeText);
     expect(errors).toEqual([]);
   });
 }

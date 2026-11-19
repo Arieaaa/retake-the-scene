@@ -81,6 +81,106 @@ describe('15 authored paths from the original acceptance artifact', () => {
   }
 });
 
+describe('first changed event presentation projection', () => {
+  const firstResults: Record<string, { kind: string; text: string }> = {
+    preview_tail: { kind: 'tail_previewed', text: '小窗最后一页有一行空白，大屏没有变化。' },
+    hold_photos: { kind: 'photos_held', text: '照片留在大屏，十二桌还在吃席。' },
+    play_intro: { kind: 'intro_screened', text: '片头亮起，老剧组的合影掠过屏幕。' },
+    read_roster: { kind: 'roster_read', text: '夜班一栏写着自动接管，人工联系人却没有填。' },
+    answer_call: { kind: 'dialogue', text: '欢迎致电。背景里响了一声微波炉的叮。' },
+    open_meeting: { kind: 'meeting_opened', text: '主位的名字换了，夜班一栏还没有换。' },
+    open_chats: { kind: 'chats_opened', text: '两边的时间戳并排亮起来。' },
+    ask_friend: { kind: 'message_forwarded', text: '转发预览已确认：今天 21:10 · 那张截图，把我头像也截进去了。' },
+    step_back: { kind: 'hiss_emitted', text: '哈——朝玩家。target=player' },
+    hiss_back: { kind: 'hiss_emitted', text: '哈——朝玩家。target=player' },
+    freeze: { kind: 'hiss_emitted', text: '哈——朝玩家。target=player' },
+    quote_clip: { kind: 'dialogue', text: '先把原拍摄者叫回来找文件。' },
+    quote_game: { kind: 'dialogue', text: '名单第十个位置先挂上一个 1。' },
+    quote_homework: { kind: 'dialogue', text: '好，还差三十七个。原拍摄者，你留过那张纸吗？' },
+  };
+  for (const testCase of acceptance.cases) {
+    it(`${testCase.caseId}: keeps the path's first result through turns, restore and forks without writing state`, () => {
+      const { store, view: initial } = start(testCase.episodeId as EpisodeId);
+      expect(initial.presentation).not.toHaveProperty('firstChangedEventId');
+      expect(readBranch(store, initial.runId, initial.branchId).presentation).not.toHaveProperty('firstChangedEventId');
+      // Hiss precedes the request root; all other paths place the first result just after it.
+      const resultIndex = initial.visibleEvents.length + (testCase.episodeId === 'hiss' ? 0 : 1);
+      let view = initial;
+      let firstChangedEvent: PlayerView['visibleEvents'][number] | undefined;
+      for (const [index, step] of testCase.turns.entries()) {
+        view = turn(store, view, step.actionId);
+        if (index === 0) {
+          firstChangedEvent = view.visibleEvents[resultIndex];
+          expect(firstChangedEvent).toMatchObject(firstResults[step.actionId]);
+          expect(firstChangedEvent.audience).toContain('player');
+          expect(initial.visibleEvents.map(event => event.eventId)).not.toContain(firstChangedEvent.eventId);
+          if (testCase.episodeId === 'hiss') expect(view.visibleEvents[resultIndex + 1].kind).toBe('player_action');
+          if (step.actionId === 'answer_call') expect(firstChangedEvent.source).toBe('authored');
+        }
+        expect(view.presentation.firstChangedEventId).toBe(firstChangedEvent!.eventId);
+        expect(view.visibleEvents.find(event => event.eventId === view.presentation.firstChangedEventId)).toEqual(firstChangedEvent);
+        const branch = store.runs[view.runId].branches[view.branchId];
+        expect(branch.state.presentation).not.toHaveProperty('firstChangedEventId');
+        for (const checkpoint of branch.checkpoints) expect(checkpoint.state.presentation).not.toHaveProperty('firstChangedEventId');
+        const saved = JSON.stringify(store);
+        expect(readBranch(store, view.runId, view.branchId)).toEqual(view);
+        expect(JSON.stringify(store)).toBe(saved);
+        const restored = JSON.parse(saved) as AuthoredStore;
+        expect(readBranch(restored, view.runId, view.branchId)).toEqual(view);
+        expect(JSON.stringify(restored)).toBe(saved);
+      }
+      const first = firstChangedEvent!;
+      const originalBranch = JSON.stringify(store.runs[view.runId].branches[view.branchId]);
+      const rewind = forkBranch(store, view.runId, view.branchId, view.checkpoints[0].id, 'first-decision');
+      expect(rewind.checkpoints).toEqual([]);
+      expect(rewind.visibleEvents).toEqual(initial.visibleEvents);
+      expect(rewind.presentation).not.toHaveProperty('firstChangedEventId');
+      const alternate = acceptance.cases.find(item => item.episodeId === testCase.episodeId && item.turns[0].actionId !== testCase.turns[0].actionId)!;
+      const changed = turn(store, rewind, alternate.turns[0].actionId);
+      const newFirst = changed.visibleEvents[resultIndex];
+      expect(newFirst).toMatchObject(firstResults[alternate.turns[0].actionId]);
+      expect(changed.presentation.firstChangedEventId).toBe(newFirst.eventId);
+      expect(newFirst.eventId).not.toBe(first.eventId);
+      expect(changed.visibleEvents.map(event => event.eventId)).not.toContain(first.eventId);
+      for (const index of [1, 2]) {
+        const laterFork = forkBranch(store, view.runId, view.branchId, view.checkpoints[index].id, `later-decision-${index}`);
+        expect(laterFork.checkpoints).toEqual(view.checkpoints.slice(0, index));
+        expect(laterFork.presentation.firstChangedEventId).toBe(first.eventId);
+        expect(laterFork.visibleEvents.find(event => event.eventId === first.eventId)).toEqual(first);
+        const continued = turn(store, laterFork, testCase.turns[index].actionId);
+        expect(continued.presentation.firstChangedEventId).toBe(first.eventId);
+        const restored = JSON.parse(JSON.stringify(store)) as AuthoredStore;
+        expect(readBranch(restored, continued.runId, continued.branchId)).toEqual(continued);
+      }
+      expect(JSON.stringify(store.runs[view.runId].branches[view.branchId])).toBe(originalBranch);
+      expect(readBranch(store, view.runId, view.branchId).presentation.firstChangedEventId).toBe(first.eventId);
+      for (const branch of Object.values(store.runs[view.runId].branches)) {
+        expect(branch.state.presentation).not.toHaveProperty('firstChangedEventId');
+        for (const checkpoint of branch.checkpoints) expect(checkpoint.state.presentation).not.toHaveProperty('firstChangedEventId');
+      }
+    });
+  }
+  it('skips non-player events and omits the reference without a checkpoint or eligible result', () => {
+    const { store, view: initial } = start('wedding');
+    const view = turn(store, initial, 'preview_tail');
+    const branch = store.runs[view.runId].branches[view.branchId];
+    const first = branch.state.visibleEvents[initial.visibleEvents.length + 1];
+    const privateEvent = { ...first, eventId: 'not-for-player', audience: ['writer'] };
+    branch.state.visibleEvents.splice(initial.visibleEvents.length, 0, privateEvent);
+    expect(readBranch(store, view.runId, view.branchId).presentation.firstChangedEventId).toBe(first.eventId);
+    branch.state.visibleEvents = [...initial.visibleEvents, privateEvent,
+      { ...first, eventId: 'action-root', kind: 'player_action' }, { ...first, eventId: 'reply-root', kind: 'reply_sent' }];
+    expect(readBranch(store, view.runId, view.branchId).presentation).not.toHaveProperty('firstChangedEventId');
+    branch.state.visibleEvents = [];
+    expect(readBranch(store, view.runId, view.branchId).presentation).not.toHaveProperty('firstChangedEventId');
+    branch.state.visibleEvents = view.visibleEvents;
+    branch.checkpoints = [];
+    const saved = JSON.stringify(store);
+    expect(readBranch(store, view.runId, view.branchId).presentation).not.toHaveProperty('firstChangedEventId');
+    expect(JSON.stringify(store)).toBe(saved);
+  });
+});
+
 describe('state ownership, revisions and idempotency', () => {
   it('returns fresh copies and mutates only the supplied serializable store', () => {
     const { store, view } = start('wedding');
@@ -469,6 +569,12 @@ describe('author packages and B-facing fixed states', () => {
     expect(previewViews.rewind.presentation.consent).toBe(false);
     expect(previewViews.rewind.visibleEvents.some(event => event.kind === 'consent_granted')).toBe(false);
     expect(previewViews.rewind.branches).toHaveLength(2);
+    for (const view of [previewViews.ready, previewViews.pending]) expect(view.presentation).not.toHaveProperty('firstChangedEventId');
+    for (const view of [previewViews.consent, previewViews.ended, previewViews.rewind]) {
+      const first = view.visibleEvents.find(event => event.kind === 'tail_previewed')!;
+      expect(first.text).toBe('小窗最后一页有一行空白，大屏没有变化。');
+      expect(view.presentation.firstChangedEventId).toBe(first.eventId);
+    }
     for (const view of Object.values(previewViews)) {
       expect(JSON.parse(JSON.stringify(view))).toEqual(view);
       assertCausalLog(view);

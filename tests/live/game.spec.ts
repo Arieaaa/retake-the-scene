@@ -54,6 +54,10 @@ for (const episodeId of ['wedding', 'office', 'romance', 'hiss', 'reply']) {
     expect(new Set(ended.visibleEvents.map(event => event.eventId)).size).toBe(ended.visibleEvents.length);
     expect(ended.visibleEvents.every(event => ['rules', 'authored', 'live'].includes(event.source))).toBe(true);
     await expect(page.locator('.scene-title h1')).toHaveText(scenario.expected.title);
+    await expect(page.locator('.scene-title .last-line')).toHaveText(`“${ended.ending!.line}”`);
+    const firstChange = ended.visibleEvents.find(event => event.eventId === ended.presentation.firstChangedEventId && event.audience.includes('player'));
+    expect(firstChange, '候选版须提供当前分支可核对的首改动引用').toBeDefined();
+    await expect(page.locator('.ending-change-text')).toHaveText(firstChange!.text);
     await expect(page.getByLabel('开启声音')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     const oldRoute = page.url();

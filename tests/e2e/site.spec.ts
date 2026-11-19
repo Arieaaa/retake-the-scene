@@ -35,6 +35,58 @@ test('站点模拟：片单响应不能清掉存档404，预览地址不可访�
   expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBeNull();
 });
 
+for (const reference of ['visible', 'missing', 'unknown'] as const) {
+  test(`站点模拟：谢幕顺序与${reference}首改动引用保持只读`, async ({ page }, testInfo) => {
+    const ended = structuredClone(previewViews.ended);
+    const firstChange = ended.visibleEvents[2];
+    firstChange.text = '<b>本分支最先改变的是电脑小窗</b>';
+    if (reference === 'missing') delete ended.presentation.firstChangedEventId;
+    else ended.presentation.firstChangedEventId = reference === 'visible' ? firstChange.eventId : 'not-in-player-view';
+    let current = ended;
+    const writes: string[] = [];
+    await page.route(api, async route => {
+      if (route.request().method() !== 'GET') writes.push(route.request().method());
+      await route.fulfill({ json: route.request().url().endsWith('/episodes') ? episodes : current });
+    });
+    await page.goto(`${origin}/#/play/${ended.runId}/${ended.branchId}`);
+    const closingLine = page.locator('.scene-title .last-line');
+    const change = page.getByRole('region', { name: '第一处被你改变的事件' });
+    await expect(closingLine).toHaveText(`“${ended.ending!.line}”`);
+    await expect(closingLine).toBeFocused();
+    if (reference === 'visible') {
+      await expect(change.locator('.ending-change-text')).toHaveText(firstChange.text);
+      await expect(change.locator('.ending-change-text b')).toHaveCount(0);
+      await expect(change).toContainText(firstChange.actorName);
+      await expect(change).toContainText(firstChange.channel);
+      await expect(change).toContainText('现场规则');
+    } else {
+      await expect(change).toContainText('当前视图没有提供可核对的首个改动事件。');
+      await expect(change.locator('.ending-change-text')).toHaveCount(0);
+      await expect(change).not.toContainText(firstChange.text);
+    }
+    expect(await page.evaluate(() => {
+      const line = document.querySelector('.scene-title .last-line')!;
+      const title = document.querySelector('.scene-title h1')!;
+      const change = document.querySelector('.ending-change')!;
+      const actions = document.querySelector('.ending-actions')!;
+      return [line.compareDocumentPosition(title), title.compareDocumentPosition(change), change.compareDocumentPosition(actions)].every(position => Boolean(position & Node.DOCUMENT_POSITION_FOLLOWING));
+    })).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('ending-order-and-change.png'), fullPage: true });
+    const saved = await page.evaluate(() => localStorage.getItem('retake.progress.site'));
+    await page.reload();
+    await expect(closingLine).toHaveText(`“${ended.ending!.line}”`);
+    expect(await page.evaluate(() => localStorage.getItem('retake.progress.site'))).toBe(saved);
+    current = structuredClone(previewViews.ready);
+    await page.goto(`${origin}/#/play/${ended.runId}/another-branch`);
+    await expect(page.locator('[data-action="preview_tail"]')).toBeEnabled();
+    await expect(change).toHaveCount(0);
+    await expect(closingLine).toHaveCount(0);
+    expect(writes).toEqual([]);
+    expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBeNull();
+  });
+}
+
 for (const status of ['ready', 'pending', 'ended'] as const) {
   test(`站点模拟：${status}完整回看与物证只读`, async ({ page }, testInfo) => {
     const view: PlayerView = structuredClone(status === 'ended' ? previewViews.ended : previewViews.consent);

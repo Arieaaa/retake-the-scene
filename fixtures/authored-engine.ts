@@ -59,7 +59,12 @@ function choices(state: BranchState): Choice[] {
   }));
 }
 function viewOf(run: AuthoredRun, branch: AuthoredBranch): PlayerView {
+  // Later forks keep the opening checkpoint; rewinding the first decision clears it.
+  const openingCount = branch.checkpoints[0]?.state.visibleEvents.length;
+  const firstChangedEvent = openingCount === undefined ? undefined : branch.state.visibleEvents.slice(openingCount)
+    .find(event => event.audience.includes('player') && event.kind !== 'player_action' && event.kind !== 'reply_sent');
   return copy({ ...branch.state,
+    presentation: { ...branch.state.presentation, ...(firstChangedEvent ? { firstChangedEventId: firstChangedEvent.eventId } : {}) },
     visibleEvents: branch.state.visibleEvents.filter(event => event.audience.includes('player')),
     checkpoints: branch.checkpoints.map(item => item.checkpoint),
     branches: Object.entries(run.branches).map(([branchId, item]) => ({ branchId, parentBranchId: item.parentBranchId, label: item.label, endingTitle: item.state.ending?.title ?? null })),

@@ -44,7 +44,7 @@ const consent: PlayerView = {
     { actionId: 'play_original', label: '按原方案准点播放', control: 'button', targets: [{ id: 'guests', label: '全场大屏', channel: 'screen' }] },
   ],
   visibleEvents: clone([...opening, tail, privatePreview, consentEvent]), inventory: clone([tailClue, consentClue]), checkpoints: clone([firstCheckpoint, secondCheckpoint]),
-  presentation: { ...ready.presentation, missing_credit: true, consent_granted: true, consent: true, consentEventId: consentEvent.eventId },
+  presentation: { ...ready.presentation, firstChangedEventId: tail.eventId, missing_credit: true, consent_granted: true, consent: true, consentEventId: consentEvent.eventId },
 };
 const ended: PlayerView = {
   ...clone(consent), revision: 3, status: 'ended', choices: [],
@@ -65,7 +65,7 @@ const rewind: PlayerView = {
   ],
   visibleEvents: clone([...opening, tail]), inventory: clone([tailClue]), checkpoints: clone([firstCheckpoint]),
   branches: [{ branchId, parentBranchId: null, label: '第一遍', endingTitle: '婚礼现场返工版' }, { branchId: rewindId, parentBranchId: branchId, label: '倒带 · 第 2 拍', endingTitle: null }],
-  presentation: { ...ready.presentation, missing_credit: true, rewind: true },
+  presentation: { ...ready.presentation, firstChangedEventId: tail.eventId, missing_credit: true, rewind: true },
 };
 
 export const previewViews: Record<'ready' | 'pending' | 'consent' | 'ended' | 'rewind', PlayerView> = { ready, pending, consent, ended, rewind };
