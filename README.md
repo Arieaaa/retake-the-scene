@@ -49,4 +49,6 @@ B 接入同源 Function API 后以 `npm run build:site` 构建 `dist-site/` 线�
 
 `src/` 为 A 前端与两个传输适配器，`shared/contracts/` 为待 B 复核的契约 v1，`content/episodes/` 与 `fixtures/` 为作者剧包及本地预演，`public/art/` 与 `public/sound/` 为原创素材，`tests/` 保存原始 15 路径、状态与界面验证。海报可用 `node scripts/export-art.mjs` 再生；哈气可用 `python3 scripts/create-sound.py` 再生。
 
+A 已验收源码提交为 `6eb9032`，已交付到 `origin/codex/a-playable-platform`；`main` 尚未合入本轮代码。B 请从该工作分支取用源码、剧包、截图和交接文档，按文档先联调婚礼。
+
 正式发布由 B 按协作约定进行；本地构建与测试不能替代匿名云端、双角色、托管存储和发布验收。
