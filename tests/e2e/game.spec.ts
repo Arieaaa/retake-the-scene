@@ -108,6 +108,26 @@ test('婚礼倒带不继承同意，旧结局保留，分享不泄露存档', as
   await expect(page.locator('.scene-title h1')).toHaveText('婚礼现场返工版');
 });
 
+test('结局另开一局回到开场，刷新可恢复且旧局仍可读取', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/#/episode/wedding');
+  for (const action of ['preview_tail', 'private_preview', 'lend_laptop']) {
+    await expect(page.locator(`[data-action="${action}"]`)).toBeEnabled();
+    await page.locator(`[data-action="${action}"]`).click();
+  }
+  await expect(page.locator('.scene-title h1')).toHaveText('婚礼现场返工版');
+  const oldRoute = page.url();
+  await page.getByRole('button', { name: '另开一局', exact: true }).click();
+  await expect(page.locator('[data-action="preview_tail"]')).toBeEnabled();
+  await expect(page).not.toHaveURL(oldRoute);
+  await page.reload();
+  await expect(page.locator('[data-action="preview_tail"]')).toBeEnabled();
+  await page.goto(oldRoute);
+  await expect(page.locator('.scene-title h1')).toHaveText('婚礼现场返工版');
+  expect(errors).toEqual([]);
+});
+
 test('猫样本不匹配可重录，自由姿态与静音不依赖麦克风', async ({ page }) => {
   await page.goto('/#/episode/hiss');
   await expect(page.locator('[data-action="custom_gesture"]')).toBeEnabled();
