@@ -49,6 +49,18 @@ PLAYWRIGHT_CHANNEL=chrome CAPTURE_EVIDENCE=1 npm run test:e2e
 
 B 接入同源 Function API 后以 `npm run build:site` 构建 `dist-site/` 线上前端；该命令同时检查产物不含完整作者剧包、引擎和固定预览。E2E 会启动本机预演与站点构建预览；站点接口用明确标记的模拟响应验证客户端行为，不代表真实后台通过。浏览器调用 `/functions/v1/app/api/...`，不携带服务端密钥；站点模式错误不会自动切换为作者预演。实际响应契约、分工进度和阻塞见 [A/B 交流文档](./docs/AB-HANDOFF.md)，投稿材料见 [作品帖草稿](./docs/A-SUBMISSION-DRAFT.md)。
 
+B 提供候选地址后，先在终端设置并导出 `RETAKE_LIVE_URL`（站点根地址，不含账号、查询参数或 hash），再执行独立真实站点入口：
+
+```sh
+PLAYWRIGHT_CHANNEL=chrome npm run test:live -- --project=preflight
+# 仅在明确允许创建真实测试局及可能的角色计费后执行
+RETAKE_LIVE_ALLOW_WRITES=1 PLAYWRIGHT_CHANNEL=chrome npm run test:live
+```
+
+只读门禁检查公开页面、在线模式与目录 API；通过后才执行五集360px静音键盘路径、刷新、分享新访客开场和婚礼授权前倒带。完整检查会创建至少10个测试局及1个分支，不自动删除旧记录。它不启动本机服务、不拦截或模拟响应；缺少地址或写入许可直接报错。报告写到被 Git 忽略的 `playwright-live-report/`，关闭请求追踪，观察附件不含 Cookie、存档ID或对白正文；只统计来源，不把 `live` 标签当作云执行证明。
+
+**当前真实站点验收未完成。** 仅确认6项检查可被发现、缺少地址/许可会拒绝、作者预演会被门禁拦截；完整成功路径仍待 B 的真实候选地址。这6项未计入本机56项通过记录，也不能替代真实双角色、并发原子写、线上盲玩与发布证据。
+
 `src/` 为 A 前端与两个传输适配器，`shared/contracts/` 为待 B 复核的契约 v1，`content/episodes/` 与 `fixtures/` 为作者剧包及本地预演，`public/art/` 与 `public/sound/` 为原创素材，`tests/` 保存原始 15 路径、状态与界面验证。海报可用 `node scripts/export-art.mjs` 再生；哈气可用 `python3 scripts/create-sound.py` 再生。
 
 A 首批已验收源码提交为 `6eb9032`，已交付到 `origin/codex/a-playable-platform`；后续恢复与倒带补丁请取该工作分支最新提交，当前验收规模为62项单测和56项浏览器检查。`main` 尚未合入本轮代码。B 请从工作分支取用源码、剧包、截图和交接文档，按文档先联调婚礼。
