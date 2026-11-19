@@ -1,0 +1,402 @@
+{
+  "contractVersion": "1.0",
+  "scriptVersion": "1.0.0",
+  "mode": "authored",
+  "cases": [
+    {
+      "caseId": "wedding-01",
+      "episodeId": "wedding",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "preview_tail"
+        },
+        {
+          "stage": 2,
+          "actionId": "private_preview"
+        },
+        {
+          "stage": 3,
+          "actionId": "lend_laptop"
+        }
+      ],
+      "expected": {
+        "endingId": "wedding.credits",
+        "title": "婚礼现场返工版",
+        "requiredEvents": [
+          "consent_granted",
+          "credits_updated"
+        ],
+        "visibleResult": "片尾出现编剧亲手确认的名字"
+      }
+    },
+    {
+      "caseId": "wedding-02",
+      "episodeId": "wedding",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "hold_photos"
+        },
+        {
+          "stage": 2,
+          "actionId": "watch_table"
+        },
+        {
+          "stage": 3,
+          "actionId": "offer_mic"
+        }
+      ],
+      "expected": {
+        "endingId": "wedding.fish",
+        "title": "这桌先上鱼",
+        "requiredEvents": [
+          "mic_declined"
+        ],
+        "visibleResult": "麦递给服务员，响起“小心盘子烫”"
+      }
+    },
+    {
+      "caseId": "wedding-03",
+      "episodeId": "wedding",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "play_intro"
+        },
+        {
+          "stage": 2,
+          "actionId": "watch_table"
+        },
+        {
+          "stage": 3,
+          "actionId": "play_original"
+        }
+      ],
+      "expected": {
+        "endingId": "wedding.on_time",
+        "title": "准点交付",
+        "requiredEvents": [
+          "original_screened"
+        ],
+        "visibleResult": "设备交接单全绿，合照空一把椅子"
+      }
+    },
+    {
+      "caseId": "office-01",
+      "episodeId": "office",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "read_roster"
+        },
+        {
+          "stage": 2,
+          "actionId": "ask_permission"
+        },
+        {
+          "stage": 3,
+          "actionId": "demo_transfer"
+        }
+      ],
+      "expected": {
+        "endingId": "office.rest",
+        "title": "系统申请调休",
+        "requiredEvents": [
+          "consent_granted",
+          "transfer_demonstrated"
+        ],
+        "visibleResult": "纪要列出夜间人工值守与负责人"
+      }
+    },
+    {
+      "caseId": "office-02",
+      "episodeId": "office",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "answer_call"
+        },
+        {
+          "stage": 2,
+          "actionId": "inspect_log"
+        },
+        {
+          "stage": 3,
+          "actionId": "write_handover"
+        }
+      ],
+      "expected": {
+        "endingId": "office.handover",
+        "title": "请在工作时间来电",
+        "requiredEvents": [
+          "handover_signed"
+        ],
+        "visibleResult": "交接纪要明确接听时段"
+      }
+    },
+    {
+      "caseId": "office-03",
+      "episodeId": "office",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "open_meeting"
+        },
+        {
+          "stage": 2,
+          "actionId": "inspect_log"
+        },
+        {
+          "stage": 3,
+          "actionId": "confirm_roster"
+        }
+      ],
+      "expected": {
+        "endingId": "office.promoted",
+        "title": "恭喜接任",
+        "requiredEvents": [
+          "forwarding_changed"
+        ],
+        "visibleResult": "深夜电话响在玩家手机"
+      }
+    },
+    {
+      "caseId": "romance-01",
+      "episodeId": "romance",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "open_chats"
+        },
+        {
+          "stage": 2,
+          "actionId": "compare_thursday"
+        },
+        {
+          "stage": 3,
+          "actionId": "ask_coach"
+        }
+      ],
+      "expected": {
+        "endingId": "romance.queues",
+        "title": "过号请重排",
+        "requiredEvents": [
+          "tickets_sent"
+        ],
+        "visibleResult": "两个窗口先后泄露同一份餐厅排号"
+      }
+    },
+    {
+      "caseId": "romance-02",
+      "episodeId": "romance",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "ask_friend"
+        },
+        {
+          "stage": 2,
+          "actionId": "compare_thursday"
+        },
+        {
+          "stage": 3,
+          "actionId": "disclose_forwarding"
+        }
+      ],
+      "expected": {
+        "endingId": "romance.tomorrow",
+        "title": "已读，明天再回",
+        "requiredEvents": [
+          "forwarding_disclosed"
+        ],
+        "visibleResult": "汽水说明认出日期，两人暂停见面"
+      }
+    },
+    {
+      "caseId": "romance-03",
+      "episodeId": "romance",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "open_chats"
+        },
+        {
+          "stage": 2,
+          "actionId": "find_draft"
+        },
+        {
+          "stage": 3,
+          "actionId": "send_original"
+        }
+      ],
+      "expected": {
+        "endingId": "romance.bbq",
+        "title": "原稿就很好",
+        "requiredEvents": [
+          "draft_sent"
+        ],
+        "visibleResult": "只亮起汽水窗口，回复取消了另两家"
+      }
+    },
+    {
+      "caseId": "hiss-01",
+      "episodeId": "hiss",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "step_back"
+        },
+        {
+          "stage": 2,
+          "actionId": "bind_back"
+        },
+        {
+          "stage": 3,
+          "actionId": "bow"
+        }
+      ],
+      "expected": {
+        "endingId": "hiss.back",
+        "title": "我先哈一步",
+        "requiredEvents": [
+          "hiss_emitted",
+          "shortcut_fired"
+        ],
+        "visibleResult": "声控送玩家回到本集的虚构评论区"
+      }
+    },
+    {
+      "caseId": "hiss-02",
+      "episodeId": "hiss",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "hiss_back"
+        },
+        {
+          "stage": 2,
+          "actionId": "bind_cover"
+        },
+        {
+          "stage": 3,
+          "actionId": "hiss_back"
+        }
+      ],
+      "expected": {
+        "endingId": "hiss.cover",
+        "title": "两只都挺凶",
+        "requiredEvents": [
+          "hiss_emitted",
+          "cover_saved"
+        ],
+        "visibleResult": "封面定格双方对哈，热评匹配最后动作"
+      }
+    },
+    {
+      "caseId": "hiss-03",
+      "episodeId": "hiss",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "freeze"
+        },
+        {
+          "stage": 2,
+          "actionId": "bind_duet"
+        },
+        {
+          "stage": 3,
+          "actionId": "move_aside"
+        }
+      ],
+      "expected": {
+        "endingId": "hiss.duet",
+        "title": "原版在右，翻唱在左",
+        "requiredEvents": [
+          "hiss_emitted",
+          "duet_created"
+        ],
+        "visibleResult": "静默玩家获得“特邀嘉宾负责挨哈”合拍"
+      }
+    },
+    {
+      "caseId": "reply-01",
+      "episodeId": "reply",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "quote_clip"
+        },
+        {
+          "stage": 2,
+          "actionId": "inspect_bucket"
+        },
+        {
+          "stage": 3,
+          "actionId": "reply_clip"
+        }
+      ],
+      "expected": {
+        "endingId": "reply.bucket",
+        "title": "赛后撤销本桶两分",
+        "requiredEvents": [
+          "clip_restored"
+        ],
+        "visibleResult": "原文件回放中垃圾桶被挪回去"
+      }
+    },
+    {
+      "caseId": "reply-02",
+      "episodeId": "reply",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "quote_game"
+        },
+        {
+          "stage": 2,
+          "actionId": "inspect_frame"
+        },
+        {
+          "stage": 3,
+          "actionId": "reply_game"
+        }
+      ],
+      "expected": {
+        "endingId": "reply.screen",
+        "title": "这人打球有点直",
+        "requiredEvents": [
+          "player_registered"
+        ],
+        "visibleResult": "赛后动作可拖动或按键让数字横过来挡拆"
+      }
+    },
+    {
+      "caseId": "reply-03",
+      "episodeId": "reply",
+      "turns": [
+        {
+          "stage": 1,
+          "actionId": "quote_homework"
+        },
+        {
+          "stage": 2,
+          "actionId": "zoom_paper"
+        },
+        {
+          "stage": 3,
+          "actionId": "reply_homework"
+        }
+      ],
+      "expected": {
+        "endingId": "reply.class",
+        "title": "成功复活全群",
+        "requiredEvents": [
+          "homework_reopened"
+        ],
+        "visibleResult": "三十七个旧头像同时进入输入状态"
+      }
+    }
+  ]
+}
