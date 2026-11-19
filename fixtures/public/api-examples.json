@@ -1,0 +1,27 @@
+{
+  "contractVersion": "1.0",
+  "note": "A/B contract examples, not live server observations",
+  "privatePreview": {
+    "requestId": "turn-7",
+    "expectedRevision": 1,
+    "stage": 2,
+    "actionId": "private_preview",
+    "params": { "target": "writer" }
+  },
+  "accepted": {
+    "httpStatus": 202,
+    "body": { "requestId": "turn-7", "status": "pending", "pollUrl": "/api/runs/r1/branches/b1/turns/turn-7" }
+  },
+  "versionConflict": {
+    "httpStatus": 409,
+    "body": { "code": "VERSION_CONFLICT", "message": "这一拍已被另一标签页接走，请读取最新状态。", "retryable": true }
+  },
+  "unavailable": {
+    "httpStatus": 422,
+    "body": { "code": "ACTION_UNAVAILABLE", "message": "当前分支尚未获得编剧同意，可私下请她看片。", "retryable": false }
+  },
+  "serviceUnavailable": {
+    "httpStatus": 503,
+    "body": { "code": "SERVICE_UNAVAILABLE", "message": "角色服务暂时不可用，请沿用原请求编号重试。", "retryable": true }
+  }
+}

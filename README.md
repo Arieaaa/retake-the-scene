@@ -2,7 +2,7 @@
 
 一款为 **2026 Qoder 高校创造力大赛 · LifeHack** 设计的原创互动短剧游戏。玩家从片单选一部戏，穿进配角，在关键时刻接管大屏、发一条消息，或亲自面对那只一定会冲你哈气的圆头耄耋。演完可以倒带，看看同一句话说给不同的人听，事情会怎样变化。
 
-**当前进度**为设计与工程规格阶段。仓库已收录五部剧的完整设计、双人实施计划及 15 条结局验收样例。可试玩的 Qoder Sites 地址将在公开版本通过匿名访问验证后补充。
+**当前进度**为 A 本地可玩预演与 B 接口交接阶段。五集作者剧包、前端舞台、等待与恢复、倒带和封面已实现，双模式构建、62项单测及34项浏览器检查通过，含五集全程Tab/Enter通关；真实云角色与托管存档尚未接入，公开版本抽检和线上盲玩仍待完成。仓库保留完整设计、双人实施计划及原始 15 条结局验收样例。可试玩的 Qoder Sites 地址将在公开版本通过匿名访问验证后补充。
 
 ## 从哪里开始
 
@@ -27,8 +27,26 @@
 
 A 负责舞台、内容和玩家体验，B 负责服务端、角色运行与部署。双方先联调婚礼篇的私下看片场景，再接入其余四部。正式目标是匿名访客可在 Qoder Sites 完整游玩五部短剧。项目接口、账号能力探针和发布验收见工程实现稿。
 
-当前可在仓库根目录运行以下命令检查样例的 JSON 语法。游戏运行与测试命令将在相应代码合入时补充。
+## 本地开发与 A/B 联调
 
 ```sh
-python3 -m json.tool 五剧十五结局-验收样例.json > /dev/null
+npm ci
+npm run dev
+npm test
+npm run build
+npm run build:site
+npx playwright install chromium
+npm run test:e2e
+# 可选：使用已安装的 Chrome，仍为独立测试上下文
+PLAYWRIGHT_CHANNEL=chrome npm run test:e2e
+# 可选：将本机浏览器证据保存到 docs/evidence/
+PLAYWRIGHT_CHANNEL=chrome CAPTURE_EVIDENCE=1 npm run test:e2e
 ```
+
+默认运行 **编剧预写 / 本机存档** 版本；这不是在线 Agent 或云端持久化验证。A/B 状态预览为 `/#/preview/ready`、`pending`、`consent`、`ended`、`rewind`；这些固定视图不写入本机存档。
+
+B 接入同源 Function API 后以 `npm run build:site` 构建 `dist-site/` 线上前端；该命令同时检查产物不含完整作者剧包、引擎和固定预览。E2E 会启动本机预演与站点构建预览；站点接口用明确标记的模拟响应验证客户端行为，不代表真实后台通过。浏览器调用 `/functions/v1/app/api/...`，不携带服务端密钥；站点模式错误不会自动切换为作者预演。实际响应契约、分工进度和阻塞见 [A/B 交流文档](./docs/AB-HANDOFF.md)，投稿材料见 [作品帖草稿](./docs/A-SUBMISSION-DRAFT.md)。
+
+`src/` 为 A 前端与两个传输适配器，`shared/contracts/` 为待 B 复核的契约 v1，`content/episodes/` 与 `fixtures/` 为作者剧包及本地预演，`public/art/` 与 `public/sound/` 为原创素材，`tests/` 保存原始 15 路径、状态与界面验证。海报可用 `node scripts/export-art.mjs` 再生；哈气可用 `python3 scripts/create-sound.py` 再生。
+
+正式发布由 B 按协作约定进行；本地构建与测试不能替代匿名云端、双角色、托管存储和发布验收。

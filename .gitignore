@@ -4,4 +4,8 @@
 !.env.example
 node_modules/
 dist/
+dist-site/
 coverage/
+playwright-report/
+test-results/
+.qoder/design/
