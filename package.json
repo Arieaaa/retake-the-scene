@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run build:site",
     "build:site": "tsc --noEmit && VITE_GAME_MODE=site vite build --outDir dist-site && node scripts/check-site-build.mjs",
-    "preview": "vite preview --host 127.0.0.1",
+    "build:authored": "tsc --noEmit && VITE_GAME_MODE=authored vite build",
+    "preview": "vite preview --outDir dist-site --host 127.0.0.1",
     "test": "vitest run",
     "test:e2e": "npm run build:site && playwright test",
     "test:live": "RETAKE_TEST_LIVE=1 playwright test"

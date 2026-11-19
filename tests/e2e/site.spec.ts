@@ -1,7 +1,9 @@
 import { expect, test, type Route } from '@playwright/test';
 import { episodes } from '../../content/episodes';
+import { createRun, emptyStore, readBranch, submitTurn } from '../../fixtures/authored-engine';
 import { previewViews } from '../../fixtures/public/views';
-import type { PlayerView, TurnInput } from '../../shared/contracts';
+import acceptance from '../../五剧十五结局-验收样例.json' with { type: 'json' };
+import type { EpisodeId, PlayerView, TurnInput } from '../../shared/contracts';
 
 const origin = 'http://127.0.0.1:5174';
 const api = '**/functions/v1/app/api/**';
@@ -536,46 +538,342 @@ for (const responseStatus of [200, 202]) {
   });
 }
 
-test('站点模拟：202刷新恢复和预写竞争只提交原请求', async ({ page }) => {
-  const ready = structuredClone(previewViews.ready);
-  const completed: PlayerView = { ...structuredClone(previewViews.rewind), runId: ready.runId, branchId: ready.branchId, revision: 1, branches: ready.branches };
-  let current = ready;
-  let turn: TurnInput | null = null;
-  const submissions: string[] = [];
-  const fallbacks: string[] = [];
-  await page.route(api, async route => {
-    const request = route.request();
-    const path = new URL(request.url()).pathname;
-    if (path.endsWith('/episodes')) return route.fulfill({ json: episodes });
-    if (path.endsWith('/api/runs')) return route.fulfill({ json: ready });
-    if (path.endsWith('/turns')) {
-      turn = request.postDataJSON() as TurnInput;
-      submissions.push(turn.requestId);
-      current = { ...ready, status: 'pending', choices: [], activeRequest: { requestId: turn.requestId, actionId: turn.actionId, label: '拖到片尾预览', startedAt: Date.now() - 9000, allowFallback: true } };
-      return route.fulfill({ status: 202, json: { requestId: turn.requestId, status: 'pending', pollUrl: `${path}/${turn.requestId}` } });
+// 引擎只用于模拟服务端，独立访客上下文不证明真实 Cookie 隔离或云端并发。
+for (const caseId of ['wedding-01', 'office-01', 'romance-02', 'hiss-01', 'reply-01']) {
+  const scenario = acceptance.cases.find(item => item.caseId === caseId);
+  if (!scenario) throw new Error(`Missing slow-task acceptance path: ${caseId}`);
+  const episodeId = scenario.episodeId as EpisodeId;
+  test(`站点模拟：五集慢任务 ${episodeId}，8秒预写、同请求恢复、通关与新访客分享`, async ({ page, browser }, testInfo) => {
+    test.setTimeout(60000);
+    const store = emptyStore();
+    const errors: string[] = [];
+    const writes: { method: string; path: string; body: unknown }[] = [];
+    const creates: { episodeId: EpisodeId; createKey: string; view: PlayerView }[] = [];
+    const submissions: TurnInput[] = [];
+    const fallbacks: string[] = [];
+    const applied: TurnInput[] = [];
+    const reads: { at: number; view: PlayerView }[] = [];
+    const polls: { at: number; runId: string; branchId: string; requestId: string; status: number }[] = [];
+    let slow: { input: TurnInput; view: PlayerView; completed: boolean } | undefined;
+    type PendingTiming = { pendingAt: number; controlsAt: number };
+    let timing: PendingTiming | undefined;
+    const apiRoot = '/functions/v1/app/api';
+    const apply = (runId: string, branchId: string, input: TurnInput) => {
+      const next = submitTurn(store, runId, branchId, input);
+      applied.push(structuredClone(input));
+      return next;
+    };
+    const handler = async (route: Route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      const method = request.method();
+      if (method !== 'GET') writes.push({ method, path, body: request.postDataJSON() });
+      if (method === 'GET' && path === `${apiRoot}/episodes`) return route.fulfill({ json: episodes });
+      if (method === 'POST' && path === `${apiRoot}/runs`) {
+        const input = request.postDataJSON() as { episodeId: EpisodeId; createKey: string };
+        expect(input).toEqual({ episodeId, createKey: expect.any(String) });
+        const view = createRun(store, input.episodeId, input.createKey);
+        creates.push({ ...input, view });
+        return route.fulfill({ json: view });
+      }
+      const match = path.match(/\/api\/runs\/([^/]+)\/branches\/([^/]+)(.*)$/);
+      if (!match) throw new Error(`Unexpected simulated API: ${method} ${path}`);
+      const [, runId, branchId, suffix] = match;
+      const current = readBranch(store, runId, branchId);
+      if (method === 'GET' && suffix === '') {
+        const view = slow && !slow.completed && slow.view.runId === runId && slow.view.branchId === branchId ? slow.view : current;
+        reads.push({ at: Date.now(), view: structuredClone(view) });
+        return route.fulfill({ json: view });
+      }
+      if (method === 'POST' && suffix === '/turns') {
+        const input = request.postDataJSON() as TurnInput;
+        submissions.push(input);
+        expect(runId).toBe(creates[0].view.runId);
+        expect(branchId).toBe(creates[0].view.branchId);
+        if (submissions.length === 1) {
+          const choice = current.choices.find(item => item.actionId === input.actionId)!;
+          expect(choice).toBeDefined();
+          // 不回填过去时间，也不提前执行：pending 保留真实开场事件和原始 input。
+          slow = { input: structuredClone(input), completed: false, view: {
+            ...current, status: 'pending', choices: [], activeRequest: {
+              requestId: input.requestId, actionId: input.actionId, label: choice.label, startedAt: Date.now(), allowFallback: true,
+            },
+          } };
+          return route.fulfill({ status: 202, json: { requestId: input.requestId, status: 'pending', pollUrl: `${path}/${input.requestId}` } });
+        }
+        expect(slow?.completed, '等待/刷新不能提交第二个 turn').toBe(true);
+        return route.fulfill({ json: apply(runId, branchId, input) });
+      }
+      if (slow && runId === slow.view.runId && branchId === slow.view.branchId) {
+        if (method === 'POST' && suffix === `/turns/${slow.input.requestId}/fallback`) {
+          fallbacks.push(suffix.split('/')[2]);
+          expect(request.postDataJSON()).toEqual({});
+          if (!slow.completed) {
+            const completed = apply(runId, branchId, slow.input);
+            slow.completed = true;
+            return route.fulfill({ json: completed });
+          }
+          return route.fulfill({ json: current });
+        }
+        if (method === 'GET' && suffix === `/turns/${slow.input.requestId}`) {
+          const status = slow.completed ? 200 : 202;
+          polls.push({ at: Date.now(), runId, branchId, requestId: slow.input.requestId, status });
+          return route.fulfill({ status, json: slow.completed ? current : { requestId: slow.input.requestId, status: 'pending', pollUrl: path } });
+        }
+      }
+      throw new Error(`Unexpected simulated API: ${method} ${path}`);
+    };
+    page.on('pageerror', error => errors.push(`player: ${error.message}`));
+    await page.setViewportSize({ width: 360, height: 780 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.addInitScript(() => {
+      // 固定走真实分享 UI 的只读输入，不申请剪贴板权限、不手造分享地址。
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+      const timing = { pendingAt: 0, controlsAt: 0 };
+      Object.assign(window, { slowTaskTiming: timing });
+      // 从首次渲染起记录控制项出现时间，避免只在第8秒后取样而漏掉提前出现。
+      new MutationObserver(() => {
+        if (!timing.pendingAt && document.querySelector('.pending-panel')) timing.pendingAt = Date.now();
+        if (!timing.controlsAt && document.querySelector('.pending-panel .inline-buttons')) timing.controlsAt = Date.now();
+      }).observe(document, { childList: true, subtree: true });
+    });
+    await page.route(api, handler);
+    try {
+      await page.goto(origin);
+      await expect(page.locator('.poster-card')).toHaveCount(5);
+      await expect(page.locator('.mode-pill')).toHaveText('在线演出');
+      await expect(page.getByRole('button', { name: '开启声音', exact: true })).toHaveAttribute('aria-pressed', 'false');
+      expect(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(await page.evaluate(() => localStorage.getItem('retake.progress.site'))).toBeNull();
+      await page.locator(`[data-episode="${episodeId}"]`).click();
+      await expect(page.locator(`[data-action="${scenario.turns[0].actionId}"]`)).toBeEnabled();
+      expect(creates).toHaveLength(1);
+      const opening = creates[0].view;
+      const branchPath = `${apiRoot}/runs/${opening.runId}/branches/${opening.branchId}`;
+      await expect(page).toHaveURL(`${origin}/#/play/${opening.runId}/${opening.branchId}`);
+      expect(opening).toMatchObject({ episodeId, revision: 0, stage: 1, status: 'ready', ending: null });
+      await expect(page.locator('.dialogue-line p')).toHaveText(opening.visibleEvents.map(event => event.text));
+
+      async function choose(turn: { stage: number; actionId: string }) {
+        const view = readBranch(store, opening.runId, opening.branchId);
+        const choice = view.choices.find(item => item.actionId === turn.actionId)!;
+        expect(choice).toBeDefined();
+        const before = submissions.length;
+        let params: TurnInput['params'] = choice.targets?.length ? { target: choice.targets[0].id } : {};
+        if (episodeId === 'hiss' && turn.stage === 2) {
+          await expect(page.getByRole('combobox')).toHaveValue('cat_hiss');
+          params.sample = 'cat_hiss';
+        }
+        const button = page.locator(`[data-action="${turn.actionId}"]`);
+        await expect(button).toBeEnabled();
+        await button.click();
+        if (episodeId === 'reply' && choice.control === 'message') {
+          const parent = view.visibleEvents.find(event => event.eventId === view.presentation[`${turn.actionId}ParentMessageId`])!;
+          const target = choice.targets![0];
+          const draft = page.getByRole('dialog', { name: '确认引用这条消息' });
+          await expect(draft).toBeVisible();
+          await expect(draft.locator('.quote-parent p')).toHaveText(parent.text);
+          await expect(draft.getByLabel('发送正文')).toHaveValue('1');
+          await expect(draft.getByLabel('发送正文')).toHaveAttribute('readonly', '');
+          expect(submissions).toHaveLength(before);
+          params = { parentMessageId: parent.eventId, target: target.id, channel: target.channel, text: '1' };
+          await expect(draft.locator('[data-confirm-quote]')).toBeEnabled();
+          await draft.locator('[data-confirm-quote]').click();
+        }
+        if (turn.actionId === 'ask_friend') {
+          const original = view.visibleEvents.find(event => event.eventId === view.presentation.friendForwardPreviewEventId)!;
+          const draft = page.getByRole('dialog', { name: '确认转发给阿圆' });
+          await expect(draft).toBeVisible();
+          await expect(draft.locator('.forward-preview p')).toHaveText(original.text);
+          await expect(draft).toContainText('不包含其他窗口或未发送草稿');
+          expect(submissions).toHaveLength(before);
+          params = { forwardEventId: original.eventId, target: 'friend', channel: 'friend' };
+          await expect(draft.locator('[data-confirm-forward]')).toBeEnabled();
+          await draft.locator('[data-confirm-forward]').click();
+        }
+        await expect.poll(() => submissions.length).toBe(before + 1);
+        expect(submissions[before]).toEqual({ requestId: expect.any(String), expectedRevision: view.revision, ...turn, params });
+      }
+
+      await choose(scenario.turns[0]);
+      const originalInput = structuredClone(submissions[0]);
+      const active = structuredClone(slow!.view.activeRequest!);
+      if (episodeId === 'wedding') expect(active.label).toBe('拖到片尾预览');
+      const pending = page.locator('.pending-panel');
+      const fallback = page.getByRole('button', { name: '用编剧预写接下去', exact: true });
+      const keepWaiting = page.getByRole('button', { name: '继续等', exact: true });
+      await expect(pending).toContainText(active.label);
+      await expect(pending).toContainText('演员正在接戏');
+      await expect(pending).toContainText('离开或刷新后，可以回来继续这一拍');
+      await expect(page.locator('.dialogue-line p')).toHaveText(opening.visibleEvents.map(event => event.text));
+      await expect(page.locator('[data-action]')).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '倒带', exact: true })).toBeDisabled();
+      await expect(fallback).toHaveCount(0);
+      await expect(keepWaiting).toHaveCount(0);
+      expect(slow!.view).toMatchObject({ revision: 0, choices: [], activeRequest: { ...active, allowFallback: true } });
+      expect(applied).toEqual([]);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBeNull();
+
+      // 真实浏览器时钟：7秒处仍没有选项，首次出现必须在真实 startedAt + 8秒之后。
+      await page.waitForFunction(startedAt => Date.now() - startedAt >= 7000, active.startedAt, { timeout: 10000 });
+      const beforeThreshold = await page.evaluate(startedAt => ({ elapsed: Date.now() - startedAt, buttons: document.querySelectorAll('.pending-panel button').length }), active.startedAt);
+      expect(beforeThreshold.elapsed).toBeLessThan(8000);
+      expect(beforeThreshold.buttons).toBe(0);
+      await expect(fallback).toBeVisible({ timeout: 5000 });
+      await expect(fallback).toBeEnabled();
+      await expect(keepWaiting).toBeEnabled();
+      timing = await page.evaluate(() => (window as unknown as { slowTaskTiming: PendingTiming }).slowTaskTiming);
+      expect(timing.pendingAt).toBeGreaterThanOrEqual(active.startedAt);
+      expect(timing.controlsAt - active.startedAt).toBeGreaterThanOrEqual(8000);
+      expect(timing.controlsAt - active.startedAt).toBeLessThan(11000);
+      await expect(pending).toContainText(active.label);
+      await expect(page.getByRole('button', { name: '倒带', exact: true })).toBeDisabled();
+      await page.screenshot({ path: testInfo.outputPath(`${episodeId}-slow-task.png`), fullPage: true });
+
+      if (episodeId === 'wedding') {
+        // 第8次请求可区分3秒封顶与持续增长的退避；每段允许1秒调度开销。
+        const delays = [1000, 1500, 2000, 2500, 3000, 3000, 3000, 3000];
+        await expect.poll(() => polls.length, { timeout: 30000, intervals: [100, 250, 500] }).toBeGreaterThanOrEqual(delays.length);
+        const pendingRead = reads.find(read => read.view.status === 'pending')!;
+        for (const [index, delay] of delays.entries()) {
+          const interval = polls[index].at - (index ? polls[index - 1].at : pendingRead.at);
+          expect(interval, `poll ${index + 1}: expected about ${delay}ms`).toBeGreaterThanOrEqual(delay - 150);
+          expect(interval, `poll ${index + 1}: expected about ${delay}ms`).toBeLessThanOrEqual(delay + 1000);
+        }
+      }
+      expect(polls.length).toBeGreaterThan(0);
+      expect(polls.every(poll => poll.requestId === originalInput.requestId && poll.runId === opening.runId && poll.branchId === opening.branchId && poll.status === 202)).toBe(true);
+
+      const readsBeforeReload = reads.length;
+      await page.reload();
+      await expect(pending).toContainText(active.label);
+      await expect(page.locator('[data-action]')).toHaveCount(0);
+      await expect(page.locator('.dialogue-line p')).toHaveText(opening.visibleEvents.map(event => event.text));
+      await expect(page.getByRole('button', { name: '倒带', exact: true })).toBeDisabled();
+      await expect(fallback).toBeEnabled();
+      expect(reads.length).toBeGreaterThan(readsBeforeReload);
+      expect(reads.slice(readsBeforeReload).map(read => read.view.activeRequest)).toEqual([active]);
+      const pollsAfterReload = polls.length;
+      await expect.poll(() => polls.length).toBeGreaterThan(pollsAfterReload);
+      expect(polls.at(-1)).toMatchObject({ runId: opening.runId, branchId: opening.branchId, requestId: originalInput.requestId, status: 202 });
+      expect(submissions).toEqual([originalInput]);
+      expect(creates).toHaveLength(1);
+      expect(applied).toEqual([]);
+      const waitingWrites = structuredClone(writes);
+      await keepWaiting.click();
+      await expect(page.getByRole('status')).toContainText('会继续等待，回来时自动查询');
+      await expect(pending).toContainText(active.label);
+      expect(writes).toEqual(waitingWrites);
+      expect(readBranch(store, opening.runId, opening.branchId)).toEqual(opening);
+
+      await fallback.click();
+      const nextAction = page.locator(`[data-action="${scenario.turns[1].actionId}"]`);
+      await expect(nextAction).toBeEnabled();
+      await expect(pending).toHaveCount(0);
+      const completed = readBranch(store, opening.runId, opening.branchId);
+      expect(completed).toMatchObject({ revision: 1, stage: scenario.turns[1].stage, status: 'ready', activeRequest: null });
+      expect(completed.visibleEvents.filter(event => event.stage === 1 && ['player_action', 'reply_sent'].includes(event.kind))).toHaveLength(1);
+      expect(completed.visibleEvents.every(event => event.source === 'authored' || event.source === 'rules')).toBe(true);
+      await expect(page.locator('.dialogue-line .dialogue-meta small')).toHaveText(completed.visibleEvents.map(event => event.source === 'authored' ? '编剧预写' : '现场规则'));
+      await page.reload();
+      await expect(nextAction).toBeEnabled();
+      await expect(page.locator('.dialogue-line p')).toHaveText(completed.visibleEvents.map(event => event.text));
+      expect(reads.at(-1)!.view).toEqual(completed);
+      expect(submissions).toHaveLength(1);
+      expect(fallbacks).toEqual(submissions.map(input => input.requestId));
+      expect(applied).toEqual([originalInput]);
+      expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBeNull();
+
+      for (const turn of scenario.turns.slice(1)) await choose(turn);
+      await expect(page.locator('.scene-title h1')).toHaveText(scenario.expected.title);
+      await expect(page.locator('.scene-title')).toContainText(scenario.expected.visibleResult);
+      const ended = readBranch(store, opening.runId, opening.branchId);
+      expect(ended).toMatchObject({ revision: scenario.turns.length, status: 'ended', activeRequest: null, ending: { id: scenario.expected.endingId, title: scenario.expected.title, text: scenario.expected.visibleResult } });
+      for (const kind of scenario.expected.requiredEvents) expect(ended.visibleEvents.some(event => event.kind === kind)).toBe(true);
+      expect(ended.visibleEvents.every(event => event.source === 'authored' || event.source === 'rules')).toBe(true);
+      expect(new Set(ended.visibleEvents.map(event => event.eventId)).size).toBe(ended.visibleEvents.length);
+      await expect(page.locator('.dialogue-line p')).toHaveText(ended.visibleEvents.map(event => event.text));
+      await expect(page.locator('.dialogue-line .dialogue-meta small')).toHaveText(ended.visibleEvents.map(event => event.source === 'authored' ? '编剧预写' : '现场规则'));
+      await expect(page.locator('.dialogue')).not.toContainText('现场接戏');
+      await expect(page.locator('.scene-title .last-line')).toHaveText(`“${ended.ending!.line}”`);
+      const saved = await page.evaluate(() => localStorage.getItem('retake.progress.site'));
+      const endingWrites = structuredClone(writes);
+      await page.reload();
+      await expect(page.locator('.scene-title h1')).toHaveText(scenario.expected.title);
+      await expect(page.locator('.scene-title')).toContainText(scenario.expected.visibleResult);
+      await expect(page.locator('.dialogue-line p')).toHaveText(ended.visibleEvents.map(event => event.text));
+      expect(reads.at(-1)!.view).toEqual(ended);
+      expect(writes).toEqual(endingWrites);
+      expect(await page.evaluate(() => localStorage.getItem('retake.progress.site'))).toBe(saved);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await expect(page.getByRole('button', { name: '开启声音', exact: true })).toHaveAttribute('aria-pressed', 'false');
+
+      await page.getByRole('button', { name: '分享开场', exact: true }).click();
+      const link = page.getByLabel('手动复制开场链接');
+      await expect(link).toBeVisible();
+      await expect(link).toHaveAttribute('readonly', '');
+      const shareURL = await link.inputValue();
+      expect(shareURL).toBe(`${origin}/#/episode/${episodeId}`);
+      for (const id of [opening.runId, opening.branchId, creates[0].createKey, ...submissions.map(input => input.requestId), ...ended.checkpoints.map(checkpoint => checkpoint.id)]) expect(shareURL).not.toContain(id);
+      expect(writes).toEqual(endingWrites);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+      const visitor = await browser.newContext({ viewport: { width: 360, height: 780 }, reducedMotion: 'reduce' });
+      try {
+        expect(await visitor.storageState()).toEqual({ cookies: [], origins: [] });
+        await visitor.route(api, handler);
+        const fresh = await visitor.newPage();
+        fresh.on('pageerror', error => errors.push(`visitor: ${error.message}`));
+        const previousReads = reads.length;
+        await fresh.goto(shareURL);
+        await expect(fresh.locator(`[data-action="${scenario.turns[0].actionId}"]`)).toBeEnabled();
+        expect(creates).toHaveLength(2);
+        const newOpening = creates[1].view;
+        expect(creates[1].createKey).not.toBe(creates[0].createKey);
+        expect(newOpening.runId).not.toBe(opening.runId);
+        expect(newOpening.branchId).not.toBe(opening.branchId);
+        expect(newOpening).toMatchObject({ episodeId, revision: 0, stage: 1, status: 'ready', activeRequest: null, ending: null, checkpoints: [], inventory: [] });
+        expect(newOpening.branches).toEqual([{ branchId: newOpening.branchId, parentBranchId: null, label: '第一遍', endingTitle: null }]);
+        await expect(fresh).toHaveURL(`${origin}/#/play/${newOpening.runId}/${newOpening.branchId}`);
+        await expect(fresh.locator('.scene-title h1')).toHaveText(opening.scene.title);
+        await expect(fresh.locator('.dialogue-line p')).toHaveText(opening.visibleEvents.map(event => event.text));
+        await expect(fresh.locator('.ending-panel, .pending-panel, .last-line')).toHaveCount(0);
+        await expect(fresh.locator('.play-page')).not.toContainText(scenario.expected.title);
+        await expect(fresh.getByRole('button', { name: '倒带', exact: true })).toBeDisabled();
+        await expect(fresh.getByRole('button', { name: '开启声音', exact: true })).toHaveAttribute('aria-pressed', 'false');
+        await expect.poll(() => reads.length).toBeGreaterThan(previousReads);
+        expect(reads.slice(previousReads).every(read => read.view.runId === newOpening.runId && read.view.revision === 0 && read.view.ending === null)).toBe(true);
+        expect(newOpening.visibleEvents.every(event => !ended.visibleEvents.some(old => old.eventId === event.eventId))).toBe(true);
+        expect(await fresh.evaluate(() => JSON.parse(localStorage.getItem('retake.progress.site')!))).toEqual({ [episodeId]: { runId: newOpening.runId, branchId: newOpening.branchId } });
+        expect(await fresh.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBeNull();
+        expect(await fresh.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true);
+        expect(await fresh.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      } finally {
+        await visitor.close();
+      }
+      expect(readBranch(store, opening.runId, opening.branchId)).toEqual(ended);
+      expect(await page.evaluate(() => localStorage.getItem('retake.progress.site'))).toBe(saved);
+      expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBeNull();
+      expect(submissions).toHaveLength(scenario.turns.length);
+      expect(new Set(submissions.map(input => input.requestId)).size).toBe(scenario.turns.length);
+      expect(fallbacks).toEqual([originalInput.requestId]);
+      expect(applied).toEqual(submissions);
+      expect(applied.filter(input => input.requestId === originalInput.requestId)).toEqual([originalInput]);
+      expect(writes.map(write => `${write.method} ${write.path}`)).toEqual([
+        `POST ${apiRoot}/runs`, `POST ${branchPath}/turns`, `POST ${branchPath}/turns/${originalInput.requestId}/fallback`,
+        ...scenario.turns.slice(1).map(() => `POST ${branchPath}/turns`), `POST ${apiRoot}/runs`,
+      ]);
+      expect(errors).toEqual([]);
+    } finally {
+      await testInfo.attach(`${episodeId}-simulated-requests`, {
+        contentType: 'application/json',
+        body: JSON.stringify({ caseId, boundary: 'client simulation only; not cookie ownership or cloud concurrency', timing, startedAt: slow?.view.activeRequest?.startedAt, writes, submissions, fallbacks, applied, polls, reads: reads.map(({ at, view }) => ({ at, runId: view.runId, branchId: view.branchId, revision: view.revision, requestId: view.activeRequest?.requestId, status: view.status })), errors }, null, 2),
+      });
     }
-    if (path.endsWith('/fallback')) {
-      fallbacks.push(path.split('/').at(-2)!);
-      current = completed;
-      return route.fulfill({ json: completed });
-    }
-    if (path.includes('/turns/')) return route.fulfill({ status: current.status === 'pending' ? 202 : 200, json: current.status === 'pending' ? { requestId: turn!.requestId, status: 'pending', pollUrl: path } : completed });
-    return route.fulfill({ json: current });
   });
-  await page.goto(`${origin}/#/episode/wedding`);
-  await expect(page.locator('[data-action="preview_tail"]')).toBeEnabled();
-  await page.locator('[data-action="preview_tail"]').click();
-  await expect(page.locator('.pending-panel')).toContainText('拖到片尾预览');
-  await page.reload();
-  await expect(page.locator('.pending-panel')).toContainText('拖到片尾预览');
-  await page.getByRole('button', { name: '用编剧预写接下去' }).click();
-  await expect(page.locator('[data-action="private_preview"]')).toBeEnabled();
-  await page.reload();
-  await expect(page.locator('[data-action="private_preview"]')).toBeEnabled();
-  expect(submissions).toHaveLength(1);
-  expect(fallbacks).toEqual(submissions);
-  expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBeNull();
-});
+}
 
 test('站点模拟：断网后重试保留requestId与玩家原选择', async ({ page }) => {
   const ready = structuredClone(previewViews.ready);
