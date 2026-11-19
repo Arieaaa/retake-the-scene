@@ -141,6 +141,9 @@ main { min-height: 65vh; outline: none; }
 .ending-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .ending-actions .primary-button { grid-column: span 2; }
 .ending-actions .text-button { grid-column: span 2; justify-content: center; }
+.share-fallback, .cover-feedback { font-size: 14px; line-height: 1.7; color: var(--site-muted); }
+.share-fallback input { font-size: 16px; }
+.cover-feedback { margin-bottom: 0; }
 .pending-panel { margin-top: 24px; padding: 22px; background: var(--site-surface); border-radius: var(--site-radius); }
 .pending-panel > div:first-child { display: flex; gap: 9px; align-items: center; color: var(--site-accent); font-size: 13px; }
 .pending-panel p { font-size: 12px; }

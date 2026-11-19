@@ -29,6 +29,9 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<GameError | null>(null);
   const [notice, setNotice] = useState('');
+  const [shareLink, setShareLink] = useState('');
+  const [coverFeedback, setCoverFeedback] = useState('');
+  const [savingCover, setSavingCover] = useState(false);
   const [muted, setMuted] = useState(() => readPreference('retake.muted', true));
   const [dialog, setDialog] = useState<'clues' | 'rewind' | 'help' | 'say' | null>(null);
   const [selectedChoice, setSelectedChoice] = useState<Choice | null>(null);
@@ -59,7 +62,7 @@ export default function App() {
   useEffect(() => { void refreshCatalog(); const listener = () => setRoute(location.hash.replace(/^#\/?/, '')); window.addEventListener('hashchange', listener); return () => window.removeEventListener('hashchange', listener); }, []);
   useEffect(() => {
     const generation = ++routeGeneration.current;
-    setDialog(null); setCompared(null); setError(null); setView(null); retry.current = null; forkRetry.current = null;
+    setDialog(null); setCompared(null); setError(null); setView(null); setNotice(''); setShareLink(''); setCoverFeedback(''); setSavingCover(false); retry.current = null; forkRetry.current = null;
     if (!route) { setBusy(false); return; }
     if (intent.current?.route !== route) intent.current = { route, key: crypto.randomUUID() };
     const createKey = intent.current.key;
@@ -189,8 +192,22 @@ export default function App() {
   }
   async function share() {
     if (!view) return;
+    const generation = routeGeneration.current;
     const url = `${location.origin}${location.pathname}#/episode/${view.episodeId}`;
-    try { await navigator.clipboard.writeText(url); setNotice('已复制开场链接，不包含结局或存档。'); } catch { setNotice(`复制失败，请手动复制：${url}`); }
+    try {
+      await navigator.clipboard.writeText(url);
+      if (generation === routeGeneration.current) { setShareLink(''); setNotice('已复制开场链接，不包含结局或存档。'); }
+    } catch { if (generation === routeGeneration.current) setShareLink(url); }
+  }
+  async function downloadCover() {
+    if (!episode || !view?.ending || savingCover) return;
+    const generation = routeGeneration.current;
+    setSavingCover(true); setCoverFeedback('');
+    try {
+      await saveCover(episode, view);
+      if (generation === routeGeneration.current) setCoverFeedback('已请求保存封面；若未出现下载，可直接截图保存上方舞台和结局。');
+    } catch { if (generation === routeGeneration.current) setCoverFeedback('封面生成失败，可直接截图保存上方舞台和结局。'); }
+    finally { if (generation === routeGeneration.current) setSavingCover(false); }
   }
   function say(choice: Choice) { setSelectedChoice(choice); setText(''); setTarget(choice.targets?.[0]?.id ?? ''); setDialog('say'); }
 
@@ -209,7 +226,7 @@ export default function App() {
         <div className="dialogue" role="log" aria-live="polite" aria-label="已发生的玩家可见对白">{view.visibleEvents.slice(-8).map(event => <div className={`dialogue-line ${event.actorId === 'player' ? 'player-line' : ''}`} key={event.eventId}><div className="dialogue-meta"><b>{event.actorName}</b><span>{event.channel === 'public' ? '现场' : event.channel === 'private' ? '私下' : event.channel}</span><small>{sourceLabel[event.source]}</small></div><p>{event.text}</p></div>)}</div>
         {view.status === 'ready' && <section className="action-panel" aria-label="当拍操作"><div className="action-heading"><span>现在，轮到你</span><button className="text-button" onClick={() => setDialog('clues')}><FolderOpen size={15} />已获物证 {view.inventory.length}</button></div>{view.episodeId === 'hiss' && view.stage === 2 && <label className="sample-picker">要使用哪段声音？<select value={sample} onChange={e => setSample(e.target.value)}><option value="cat_hiss">猫刚才的哈气（预制声纹）</option><option value="player_word">我自己念的词（剧内样本）</option></select></label>}<div className="choices">{view.choices.map(choice => <div key={choice.actionId} className="choice-wrap"><button className="choice" disabled={busy || preview || Boolean(retry.current || forkRetry.current)} onClick={() => choice.control === 'gesture' && choice.actionId === 'custom_gesture' ? say(choice) : void act(choice)} data-action={choice.actionId}><span><b>{choice.label}</b>{choice.hint && <small>{choice.hint}</small>}</span>{busy ? <LoaderCircle size={17} className="spin" /> : <ArrowRight size={17} />}</button>{choice.control === 'message' && view.episodeId !== 'reply' && <button className="say-button" disabled={busy || preview || Boolean(retry.current || forkRetry.current)} onClick={() => say(choice)}>换一句自己的话</button>}</div>)}</div>{preview && <p className="preview-note">固定交接状态仅供核对字段和画面。回片单可实际游玩。</p>}</section>}
         {view.status === 'pending' && <section className="pending-panel" aria-live="polite"><div><LoaderCircle className="spin" /><b>{mode === 'authored' ? '编剧正在把这一拍接下去' : '演员正在接戏'}</b></div><p>你已选择：{view.activeRequest?.label}</p><small>离开或刷新后，可以回来继续这一拍。</small>{elapsed >= 8 && view.activeRequest?.allowFallback && <div className="inline-buttons"><button onClick={() => setNotice('会继续等待，回来时自动查询。')}>继续等</button><button disabled={busy || preview} onClick={() => void fallback()}>用编剧预写接下去</button></div>}</section>}
-        {view.ending && <section className="ending-panel"><p className="last-line">“{view.ending.line}”</p><div className="ending-actions"><button className="primary-button" disabled={busy || preview || Boolean(forkRetry.current)} onClick={() => setDialog('rewind')}><RotateCcw size={17} />倒回去，换个演法</button><button className="secondary-button" onClick={() => void share()}><Copy size={17} />分享开场</button><button className="secondary-button" onClick={async () => { try { await saveCover(episode, view); setNotice('结局封面已生成，可保存到本机。'); } catch (e) { setNotice(asError(e).message); } }}><Download size={17} />保存这张剧照</button><button className="text-button" disabled={busy || preview} onClick={() => navigate(`new/${view.episodeId}`)}>另开一局</button></div></section>}
+        {view.ending && <section className="ending-panel"><p className="last-line">“{view.ending.line}”</p><div className="ending-actions"><button className="primary-button" disabled={busy || preview || Boolean(forkRetry.current)} onClick={() => setDialog('rewind')}><RotateCcw size={17} />倒回去，换个演法</button><button className="secondary-button" onClick={() => void share()}><Copy size={17} />分享开场</button><button className="secondary-button" disabled={savingCover} aria-busy={savingCover} onClick={() => void downloadCover()}>{savingCover ? <LoaderCircle size={17} className="spin" /> : <Download size={17} />}{savingCover ? '正在生成剧照' : '保存这张剧照'}</button><button className="text-button" disabled={busy || preview} onClick={() => navigate(`new/${view.episodeId}`)}>另开一局</button></div>{shareLink && <div className="share-fallback"><p role="status">自动复制不可用，请长按链接或使用键盘复制。不包含结局或存档。</p><label className="field">手动复制开场链接<input readOnly value={shareLink} autoFocus onFocus={e => e.currentTarget.select()} /></label></div>}{coverFeedback && <p className="cover-feedback" role="status">{coverFeedback}</p>}</section>}
       </div></div></div>}
       {error && <div className="error-panel" role="alert"><b>{error.status === 404 ? '这个存档暂时找不到' : '这一拍没有接上'}</b><p>{error.message}</p>{!view && episodesAllowed.includes(recoveryEpisode ?? '') && <p>另开只创建新局，不删除旧存档。</p>}<div className="inline-buttons">{error.retryable && <button onClick={() => void retryAction()} disabled={busy}>重试原操作</button>}{!view && episodesAllowed.includes(recoveryEpisode ?? '') && <button disabled={busy} onClick={() => navigate(`new/${recoveryEpisode}`)}>另开一局</button>}<button onClick={() => navigate('')}>回片单</button></div><small>{error.code}</small></div>}
     </main>

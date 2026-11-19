@@ -163,6 +163,87 @@ test('双窗切换不耗回合，草稿可发给明确收件人', async ({ page 
   await expect(page.locator('.scene-title h1')).toHaveText('原稿就很好');
 });
 
+for (const failure of ['unavailable', 'denied'] as const) {
+  test(`分享失败可持续手动复制且不改存档：${failure}`, async ({ page }, testInfo) => {
+    await page.addInitScript(failure => {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: failure === 'unavailable' ? undefined : { writeText: async () => { throw new DOMException('Permission denied', 'NotAllowedError'); } } });
+    }, failure);
+    await page.goto('/?tracking=discard#/preview/ended');
+    await expect(page.locator('.ending-panel')).toBeVisible();
+    const saved = await page.evaluate(() => localStorage.getItem('retake.authored.v1'));
+    await page.clock.install();
+    await page.getByRole('button', { name: '分享开场' }).click();
+    const link = page.getByLabel('手动复制开场链接');
+    await expect(link).toBeFocused();
+    await expect(link).toHaveValue(`${new URL(page.url()).origin}/#/episode/wedding`);
+    expect(await link.evaluate(element => {
+      const input = element as HTMLInputElement;
+      return input.selectionStart === 0 && input.selectionEnd === input.value.length;
+    })).toBe(true);
+    await page.clock.runFor(5000);
+    await expect(link).toBeVisible();
+    await expect(page.locator('.scene-title h1')).toHaveText('婚礼现场返工版');
+    expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBe(saved);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('share-fallback.png'), fullPage: true });
+    await page.getByRole('button', { name: '这集我来演，返回片单' }).click();
+    await expect(page.locator('.poster-card')).toHaveCount(5);
+    await expect(link).toHaveCount(0);
+  });
+}
+
+for (const failure of ['canvas', 'encoding', 'decode'] as const) {
+  test(`封面失败保留舞台和持续截图指引：${failure}`, async ({ page }, testInfo) => {
+    const errors: string[] = [];
+    const downloads: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('download', download => downloads.push(download.suggestedFilename()));
+    await page.goto('/#/preview/ended');
+    await expect(page.locator('.ending-panel')).toBeVisible();
+    const saved = await page.evaluate(() => localStorage.getItem('retake.authored.v1'));
+    await page.evaluate(failure => {
+      if (failure === 'canvas') HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElement.prototype.getContext;
+      if (failure === 'encoding') HTMLCanvasElement.prototype.toBlob = callback => callback(null);
+      if (failure === 'decode') HTMLImageElement.prototype.decode = async () => { throw new DOMException('The source image cannot be decoded.', 'EncodingError'); };
+    }, failure);
+    await page.clock.install();
+    const save = page.getByRole('button', { name: '保存这张剧照' });
+    await save.click();
+    await expect(page.locator('.cover-feedback')).toContainText('可直接截图保存上方舞台和结局');
+    await page.clock.runFor(5000);
+    await expect(page.locator('.cover-feedback')).toBeVisible();
+    await expect(save).toBeEnabled();
+    await expect(page.locator('.stage svg[data-scene-art]')).toBeVisible();
+    await expect(page.locator('.scene-title h1')).toHaveText('婚礼现场返工版');
+    expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBe(saved);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('cover-fallback.png'), fullPage: true });
+    expect(downloads).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const outcome of ['success', 'failure'] as const) {
+  test(`分享${outcome}迟到不覆盖新页面`, async ({ page }) => {
+    await page.addInitScript(outcome => {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: () => new Promise<void>((resolve, reject) => {
+        window.addEventListener('settle-clipboard', () => outcome === 'success' ? resolve() : reject(new DOMException('Permission denied', 'NotAllowedError')), { once: true });
+      }) } });
+    }, outcome);
+    await page.goto('/#/preview/ended');
+    await expect(page.locator('.ending-panel')).toBeVisible();
+    await page.getByRole('button', { name: '分享开场' }).click();
+    await page.getByRole('button', { name: '这集我来演，返回片单' }).click();
+    await expect(page.locator('.poster-card')).toHaveCount(5);
+    await page.evaluate(async () => {
+      window.dispatchEvent(new Event('settle-clipboard'));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    });
+    await expect(page.locator('.toast')).toHaveCount(0);
+    await expect(page.getByLabel('手动复制开场链接')).toHaveCount(0);
+  });
+}
+
 test('仅键盘与减少动画也能完成扣1，保存结局封面成功', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/#/episode/reply');
