@@ -12,6 +12,12 @@ for (const scenario of acceptance.cases) {
       const choice = page.locator(`[data-action="${turn.actionId}"]`);
       await expect(choice).toBeEnabled();
       await choice.click();
+      if (scenario.episodeId === 'reply' && /^(quote_|reply_)/.test(turn.actionId)) {
+        await expect(page.getByRole('dialog', { name: '确认引用这条消息' })).toBeVisible();
+        const confirm = page.locator('button[data-confirm-quote]');
+        await expect(confirm).toBeEnabled();
+        await confirm.click();
+      }
     }
     await expect(page.locator('.scene-title h1')).toHaveText(scenario.expected.title);
     await expect(page.locator('.scene-title')).toContainText(scenario.expected.visibleResult);
@@ -73,12 +79,120 @@ for (const episodeId of ['wedding', 'office', 'romance', 'hiss', 'reply']) {
       await page.keyboard.press('Enter');
     }
     await activate(`[data-episode="${episodeId}"]`);
-    for (const turn of scenario.turns) await activate(`[data-action="${turn.actionId}"]`);
+    for (const turn of scenario.turns) {
+      await activate(`[data-action="${turn.actionId}"]`);
+      if (episodeId === 'reply' && /^(quote_|reply_)/.test(turn.actionId)) {
+        await expect(page.getByRole('dialog', { name: '确认引用这条消息' })).toBeVisible();
+        await activate('button[data-confirm-quote]');
+      }
+    }
     await expect(page.locator('.scene-title h1')).toHaveText(scenario.expected.title);
     await expect(page.locator('.scene-title')).toContainText(scenario.expected.visibleResult);
     await expect(page.getByLabel('开启声音')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(errors).toEqual([]);
+  });
+}
+
+test('扣1引用草稿可撤回改选，确认前不落拍且正文固定', async ({ page }, testInfo) => {
+  await page.goto('/#/episode/reply');
+  await expect(page.locator('[data-action="quote_clip"]')).toBeEnabled();
+  const saved = await page.evaluate(() => localStorage.getItem('retake.authored.v1'));
+  await page.locator('[data-action="quote_clip"]').click();
+  const draft = page.getByRole('dialog', { name: '确认引用这条消息' });
+  await expect(draft).toBeVisible();
+  await expect(draft.locator('.quote-parent')).toContainText('扣 1 复活完整版');
+  await expect(draft.getByLabel('发送正文')).toHaveValue('1');
+  await expect(draft.getByLabel('发送正文')).toHaveAttribute('readonly', '');
+  expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBe(saved);
+  await draft.getByRole('button', { name: '撤回草稿，重新选楼' }).click();
+  await expect(page.locator('[data-action="quote_game"]')).toBeEnabled();
+  await page.locator('[data-action="quote_game"]').click();
+  await expect(draft.locator('.quote-parent')).toContainText('周六打球差一个');
+  await expect(draft).toContainText('球友的球局楼');
+  expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBe(saved);
+  await page.screenshot({ path: testInfo.outputPath('reply-draft.png'), fullPage: true });
+  await draft.getByRole('button', { name: '确认引用并发送 1' }).click();
+  await expect(page.locator('[data-action="inspect_frame"]')).toBeEnabled();
+  await page.locator('[data-action="inspect_frame"]').click();
+  await expect(page.locator('[data-action="reply_game"]')).toBeEnabled();
+  const beforeFinal = await page.evaluate(() => localStorage.getItem('retake.authored.v1'));
+  await page.locator('[data-action="reply_game"]').click();
+  await expect(draft).toBeVisible();
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBe(beforeFinal);
+  await page.locator('[data-action="reply_homework"]').click();
+  await expect(draft).toContainText('课代表的订正楼');
+  await draft.getByRole('button', { name: '确认引用并发送 1' }).click();
+  await expect(page.locator('.scene-title h1')).toHaveText('成功复活全群');
+  const { replies, parents } = await page.evaluate(() => {
+    const [, , runId, branchId] = location.hash.split('/');
+    const state = JSON.parse(localStorage.getItem('retake.authored.v1')!).store.runs[runId].branches[branchId].state;
+    return { replies: state.visibleEvents.filter((event: { kind: string }) => event.kind === 'reply_sent') as { text: string; causeIds: string[] }[], parents: [state.presentation.quote_gameParentMessageId, state.presentation.reply_homeworkParentMessageId] as string[] };
+  });
+  expect(replies).toHaveLength(2);
+  expect(replies.map(event => event.text)).toEqual(['1', '1']);
+  expect(replies[0].causeIds).toContain(parents[0]);
+  expect(replies[1].causeIds).toContain(parents[1]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('倒回首拍后仍能从界面对照与回看旧线，不提交新动作', async ({ page }, testInfo) => {
+  await page.goto('/#/episode/wedding');
+  for (const action of ['preview_tail', 'private_preview', 'lend_laptop']) {
+    await expect(page.locator(`[data-action="${action}"]`)).toBeEnabled();
+    await page.locator(`[data-action="${action}"]`).click();
+  }
+  await expect(page.locator('.scene-title h1')).toHaveText('婚礼现场返工版');
+  const oldRoute = page.url();
+  const oldEvents = await page.locator('.dialogue-line p').allTextContents();
+  await page.getByRole('button', { name: '倒回去，换个演法' }).click();
+  await page.locator('.rewind-list').first().getByRole('button').first().click();
+  await expect(page.locator('[data-action="preview_tail"]')).toBeEnabled();
+  const saved = await page.evaluate(() => localStorage.getItem('retake.authored.v1'));
+  await page.reload();
+  const rewind = page.getByRole('button', { name: '倒带', exact: true });
+  await expect(rewind).toBeEnabled();
+  await rewind.click();
+  await expect(page.locator('dialog')).toContainText('这条线还没有可倒带的决策点');
+  await expect(page.locator('.rewind-list').first().getByRole('button')).toHaveCount(0);
+  await page.getByRole('button', { name: '对照：婚礼现场返工版' }).click();
+  await expect(page.locator('.branch-compare')).toContainText('玩家可见的第一处差异');
+  await page.screenshot({ path: testInfo.outputPath('first-beat-replay.png'), fullPage: true });
+  await page.locator('.rewind-list').nth(1).getByRole('button', { name: /婚礼现场返工版/ }).click();
+  await expect(page).toHaveURL(oldRoute);
+  await expect(page.locator('.dialogue-line p')).toHaveText(oldEvents);
+  expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBe(saved);
+});
+
+for (const operation of ['fork', 'new']) {
+  test(`片单保留上次结局并继续未结束的新线：${operation}`, async ({ page }) => {
+    await page.goto('/#/episode/wedding');
+    for (const action of ['preview_tail', 'private_preview', 'lend_laptop']) {
+      await expect(page.locator(`[data-action="${action}"]`)).toBeEnabled();
+      await page.locator(`[data-action="${action}"]`).click();
+    }
+    await expect(page.locator('.scene-title h1')).toHaveText('婚礼现场返工版');
+    if (operation === 'fork') {
+      await page.getByRole('button', { name: '倒回去，换个演法' }).click();
+      await page.locator('.rewind-list').first().getByRole('button').first().click();
+    } else await page.getByRole('button', { name: '另开一局', exact: true }).click();
+    await expect(page.locator('[data-action="preview_tail"]')).toBeEnabled();
+    const currentRoute = page.url();
+    await page.getByRole('button', { name: '回片单', exact: true }).click();
+    await expect(page.locator('[data-episode="wedding"]')).toContainText('上次收场：婚礼现场返工版');
+    await page.reload();
+    await expect(page.locator('[data-episode="wedding"]')).toContainText('上次收场：婚礼现场返工版');
+    await page.locator('[data-episode="wedding"]').click();
+    await expect(page).toHaveURL(currentRoute);
+    await expect(page.locator('[data-action="preview_tail"]')).toBeEnabled();
+    for (const action of ['hold_photos', 'watch_table', 'offer_mic']) {
+      await expect(page.locator(`[data-action="${action}"]`)).toBeEnabled();
+      await page.locator(`[data-action="${action}"]`).click();
+    }
+    await expect(page.locator('.scene-title h1')).toHaveText('这桌先上鱼');
+    await page.getByRole('button', { name: '回片单', exact: true }).click();
+    await expect(page.locator('[data-episode="wedding"]')).toContainText('上次收场：这桌先上鱼');
   });
 }
 
@@ -289,7 +403,19 @@ for (const outcome of ['success', 'failure'] as const) {
 test('仅键盘与减少动画也能完成扣1，保存结局封面成功', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/#/episode/reply');
-  for (const action of ['quote_game', 'inspect_frame', 'reply_game']) { const button = page.locator(`[data-action="${action}"]`); await expect(button).toBeEnabled(); await button.focus(); await page.keyboard.press('Enter'); }
+  for (const action of ['quote_game', 'inspect_frame', 'reply_game']) {
+    const button = page.locator(`[data-action="${action}"]`);
+    await expect(button).toBeEnabled();
+    await button.focus();
+    await page.keyboard.press('Enter');
+    if (/^(quote_|reply_)/.test(action)) {
+      await expect(page.getByRole('dialog', { name: '确认引用这条消息' })).toBeVisible();
+      const confirm = page.locator('button[data-confirm-quote]');
+      await expect(confirm).toBeEnabled();
+      await confirm.focus();
+      await page.keyboard.press('Enter');
+    }
+  }
   await expect(page.locator('.scene-title h1')).toHaveText('这人打球有点直');
   await page.getByRole('button', { name: '横过来挡拆' }).focus(); await page.keyboard.press('Enter');
   await expect(page.locator('.court-action')).toContainText('挡拆成功');
@@ -345,10 +471,20 @@ test('只有可说话的动作提供自由台词，扣1正文不可改写', asyn
   await expect(page.getByRole('button', { name: '换一句自己的话' })).toHaveCount(0);
   for (const action of ['quote_game', 'inspect_frame']) {
     await page.locator(`[data-action="${action}"]`).click();
+    if (/^(quote_|reply_)/.test(action)) {
+      await expect(page.getByRole('dialog', { name: '确认引用这条消息' })).toBeVisible();
+      const confirm = page.locator('button[data-confirm-quote]');
+      await expect(confirm).toBeEnabled();
+      await confirm.click();
+    }
     await expect(page.locator('.action-panel')).toBeVisible();
   }
   await expect(page.getByRole('button', { name: '换一句自己的话' })).toHaveCount(0);
   await page.locator('[data-action="reply_game"]').click();
+  await expect(page.getByRole('dialog', { name: '确认引用这条消息' })).toBeVisible();
+  const confirm = page.locator('button[data-confirm-quote]');
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
   await expect(page.locator('.scene-title h1')).toHaveText('这人打球有点直');
 });
 
@@ -365,6 +501,10 @@ test('未获得的反转不预显，原片加载后各帧是真实不同图', as
   await expect(page.locator('[data-action="quote_clip"]')).toBeEnabled();
   await expect(page.locator('.frame-controls')).toHaveCount(0);
   await page.locator('[data-action="quote_clip"]').click();
+  await expect(page.getByRole('dialog', { name: '确认引用这条消息' })).toBeVisible();
+  const confirm = page.locator('button[data-confirm-quote]');
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
   await expect(page.locator('[data-action="inspect_bucket"]')).toBeEnabled();
   const first = await page.locator('.clip-player svg').innerHTML();
   await page.getByRole('button', { name: '桶左移', exact: true }).click();

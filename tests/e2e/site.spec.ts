@@ -80,6 +80,70 @@ for (const status of ['ready', 'pending', 'ended'] as const) {
   });
 }
 
+test('站点模拟：引用草稿只认当前可见楼层，取消零写入、断网沿原楼层重试', async ({ page }) => {
+  const ready: PlayerView = { ...structuredClone(previewViews.ready), episodeId: 'reply', presentation: { quote_gameParentMessageId: 'projected-ball-message' }, choices: [{ actionId: 'quote_game', label: '引用 · 缺人球局', control: 'message', targets: [{ id: 'baller', label: '球友的球局楼', channel: 'group' }] }], visibleEvents: [] };
+  const parent = { ...previewViews.ready.visibleEvents[0], eventId: 'projected-ball-message', actorId: 'baller', actorName: '球友', channel: 'group', text: '<b>周六打球差一个</b>' };
+  let available = false;
+  let current = ready;
+  const inputs: TurnInput[] = [];
+  await page.route(api, async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/episodes')) return route.fulfill({ json: episodes });
+    if (path.endsWith('/turns')) {
+      inputs.push(route.request().postDataJSON());
+      if (inputs.length === 1) return route.abort('internetdisconnected');
+      current = { ...ready, revision: 1, stage: 2, choices: [{ actionId: 'inspect_frame', label: '看缺人通知的帧', control: 'button' }] };
+    }
+    return route.fulfill({ json: { ...current, visibleEvents: available ? [parent] : [] } });
+  });
+  await page.goto(`${origin}/#/play/${ready.runId}/${ready.branchId}`);
+  await page.locator('[data-action="quote_game"]').click();
+  const draft = page.getByRole('dialog', { name: '确认引用这条消息' });
+  await expect(draft.getByRole('alert')).toContainText('该引用楼层暂不可见');
+  await expect(draft.getByRole('button', { name: '确认引用并发送 1' })).toBeDisabled();
+  expect(inputs).toEqual([]);
+  available = true;
+  await page.reload();
+  await page.locator('[data-action="quote_game"]').click();
+  await expect(draft.locator('.quote-parent p')).toHaveText(parent.text);
+  await expect(draft.locator('.quote-parent p b')).toHaveCount(0);
+  await draft.getByRole('button', { name: '撤回草稿，重新选楼' }).click();
+  expect(inputs).toEqual([]);
+  await page.locator('[data-action="quote_game"]').click();
+  await draft.getByRole('button', { name: '确认引用并发送 1' }).click();
+  await expect(page.getByRole('alert')).toContainText('网络');
+  await expect(page.locator('.submission-panel')).toContainText('这次操作尚未确认');
+  await expect(page.locator('.submission-text')).toHaveText('1');
+  expect(inputs).toHaveLength(1);
+  expect(inputs[0].params).toEqual({ parentMessageId: parent.eventId, target: 'baller', channel: 'group', text: '1' });
+  await page.getByRole('button', { name: '重试原操作' }).click();
+  await expect(page.locator('[data-action="inspect_frame"]')).toBeEnabled();
+  expect(inputs).toHaveLength(2);
+  expect(inputs[1]).toEqual(inputs[0]);
+  expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBeNull();
+});
+
+test('站点模拟：首拍旧线入口和对照只读取，不生成回合或分支', async ({ page }) => {
+  const ready = structuredClone(previewViews.ready);
+  const old = { ...structuredClone(previewViews.ended), runId: ready.runId, branchId: 'old-ended-line' };
+  ready.branches = [...ready.branches, { branchId: old.branchId, parentBranchId: null, label: '旧线', endingTitle: old.ending!.title }];
+  ready.checkpoints = [];
+  const writes: string[] = [];
+  await page.route(api, async route => {
+    if (route.request().method() !== 'GET') writes.push(route.request().url());
+    const path = new URL(route.request().url()).pathname;
+    return route.fulfill({ json: path.endsWith('/episodes') ? episodes : path.endsWith(old.branchId) ? old : ready });
+  });
+  await page.goto(`${origin}/#/play/${ready.runId}/${ready.branchId}`);
+  await page.getByRole('button', { name: '倒带', exact: true }).click();
+  await page.getByRole('button', { name: `对照：${old.ending!.title}` }).click();
+  await expect(page.locator('.branch-compare')).toBeVisible();
+  await page.locator('.rewind-list').nth(1).getByRole('button', { name: new RegExp(old.ending!.title) }).click();
+  await expect(page.locator('.scene-title h1')).toHaveText(old.ending!.title);
+  await expect(page.locator('.dialogue-line p')).toHaveText(old.visibleEvents.map(event => event.text));
+  expect(writes).toEqual([]);
+});
+
 for (const status of [404, 409, 503]) {
   for (const entry of ['episode/wedding', 'play/old-run/old-branch']) {
     test(`站点模拟：${entry}恢复${status}后显式另开，不删除旧存档`, async ({ page }, testInfo) => {

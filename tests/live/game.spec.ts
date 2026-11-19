@@ -39,7 +39,13 @@ for (const episodeId of ['wedding', 'office', 'romance', 'hiss', 'reply']) {
     expect(opening.episodeId).toBe(episodeId);
     expect(opening.stage).toBe(1);
     expect(opening.ending).toBeNull();
-    for (const turn of scenario.turns) await activate(`[data-action="${turn.actionId}"]`);
+    for (const turn of scenario.turns) {
+      await activate(`[data-action="${turn.actionId}"]`);
+      if (episodeId === 'reply' && /^(quote_|reply_)/.test(turn.actionId)) {
+        await expect(page.getByRole('dialog', { name: '确认引用这条消息' })).toBeVisible();
+        await activate('button[data-confirm-quote]');
+      }
+    }
     await expect(page.locator('.ending-panel')).toBeVisible({ timeout: 30000 });
     const ended = await readView(page);
     expect(ended.scriptVersion).toBe(acceptance.scriptVersion);

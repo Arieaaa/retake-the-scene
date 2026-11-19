@@ -171,7 +171,10 @@ dialog p { font-size: 13px; color: var(--site-muted); }
 .help-steps li::marker { color: var(--site-accent); }
 .help-steps b { font-size: 14px; }
 .help-steps p { margin: 6px 0 0; }
-.mode-explanation { background: var(--site-surface); padding: 17px; border-radius: 8px; }
+.mode-explanation, .quote-parent { background: var(--site-surface); padding: 17px; border-radius: 8px; }
+.quote-parent { border-left: 3px solid var(--site-accent); overflow-wrap: anywhere; }
+.quote-parent b { font-size: 14px; }
+.quote-parent p { font-size: 16px; line-height: 1.7; }
 .clue-card { border-bottom: 1px solid var(--site-border); padding: 15px 0; }
 .clue-card h3 { font-size: 15px; margin: 0; }
 .clue-card small { color: var(--site-accent); font-size: 10px; }
