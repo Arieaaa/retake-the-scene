@@ -43,6 +43,8 @@ PLAYWRIGHT_CHANNEL=chrome npm run test:e2e
 PLAYWRIGHT_CHANNEL=chrome CAPTURE_EVIDENCE=1 npm run test:e2e
 ```
 
+[本机素材归档](./docs/evidence/) 已更新至界面源码 `fbd41a7`：15结局、3种片单尺寸、4张下载封面、5种固定交接状态及2张草稿/旧线弹窗，共29张。采集命令、时间、尺寸与图像走读范围见 [素材来源记录](./docs/AB-HANDOFF.md#当前素材与来源)；不是实际手机、公开站点或Qoder开发过程证据。
+
 默认运行 **编剧预写 / 本机存档** 版本；这不是在线 Agent 或云端持久化验证。A/B 状态预览为 `/#/preview/ready`、`pending`、`consent`、`ended`、`rewind`；这些固定视图不写入本机存档。
 
 已知剧目的存档恢复失败时，可以显式“另开一局”；不会自动替换或删除旧存档，只有创建成功才更新上次游玩位置。创建响应丢失后，重试沿用同一 `createKey`；倒带失败会退出弹窗并保留检查点与 `forkKey` 供原操作重试。切页后，创建、回合续查、重试、预写、倒带和分支对照的迟到响应不会覆盖新页面与游玩位置。
@@ -71,6 +73,6 @@ RETAKE_LIVE_ALLOW_WRITES=1 PLAYWRIGHT_CHANNEL=chrome npm run test:live
 
 `src/` 为 A 前端与两个传输适配器，`shared/contracts/` 为待 B 复核的契约 v1，`content/episodes/` 与 `fixtures/` 为作者剧包及本地预演，`public/art/` 与 `public/sound/` 为原创素材，`tests/` 保存原始 15 路径、状态与界面验证。海报可用 `node scripts/export-art.mjs` 再生；哈气可用 `python3 scripts/create-sound.py` 再生。
 
-A 首批已验收源码提交为 `6eb9032`，已交付到 `origin/codex/a-playable-platform`；后续恢复与倒带补丁请取该工作分支最新提交，当前验收规模为62项单测和75项浏览器检查。`main` 尚未合入本轮代码。B 请从工作分支取用源码、剧包、截图和交接文档，按文档先联调婚礼。
+A 首批已验收源码提交为 `6eb9032`，已交付到 `origin/codex/a-playable-platform`；最新已验收界面源码为 `fbd41a7`（引用草稿、首拍旧线入口与上次结局保留），后续素材和交接记录请取该工作分支最新提交，当前验收规模为62项单测和75项浏览器检查。`main` 尚未合入本轮代码。B 请从工作分支取用源码、剧包、截图和交接文档，按文档先联调婚礼。
 
 正式发布由 B 按协作约定进行；本地构建与测试不能替代匿名云端、双角色、托管存储和发布验收。

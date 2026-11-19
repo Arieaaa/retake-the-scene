@@ -111,7 +111,7 @@ test('扣1引用草稿可撤回改选，确认前不落拍且正文固定', asyn
   await expect(draft.locator('.quote-parent')).toContainText('周六打球差一个');
   await expect(draft).toContainText('球友的球局楼');
   expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBe(saved);
-  await page.screenshot({ path: testInfo.outputPath('reply-draft.png'), fullPage: true });
+  await page.screenshot({ path: process.env.CAPTURE_EVIDENCE ? 'docs/evidence/reply-draft.png' : testInfo.outputPath('reply-draft.png') });
   await draft.getByRole('button', { name: '确认引用并发送 1' }).click();
   await expect(page.locator('[data-action="inspect_frame"]')).toBeEnabled();
   await page.locator('[data-action="inspect_frame"]').click();
@@ -158,7 +158,7 @@ test('倒回首拍后仍能从界面对照与回看旧线，不提交新动作',
   await expect(page.locator('.rewind-list').first().getByRole('button')).toHaveCount(0);
   await page.getByRole('button', { name: '对照：婚礼现场返工版' }).click();
   await expect(page.locator('.branch-compare')).toContainText('玩家可见的第一处差异');
-  await page.screenshot({ path: testInfo.outputPath('first-beat-replay.png'), fullPage: true });
+  await page.screenshot({ path: process.env.CAPTURE_EVIDENCE ? 'docs/evidence/first-beat-replay.png' : testInfo.outputPath('first-beat-replay.png') });
   await page.locator('.rewind-list').nth(1).getByRole('button', { name: /婚礼现场返工版/ }).click();
   await expect(page).toHaveURL(oldRoute);
   await expect(page.locator('.dialogue-line p')).toHaveText(oldEvents);
@@ -431,6 +431,7 @@ test('固定A/B交接状态可直接打开，不修改本机存档', async ({ pa
     await page.goto(`/#/preview/${state}`);
     await expect(page.locator('.play-page')).toBeVisible();
     await expect(page.locator('.play-topline')).toContainText('固定交接预览');
+    if (process.env.CAPTURE_EVIDENCE) await page.screenshot({ path: `docs/evidence/preview-${state}.png`, fullPage: true });
   }
   expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBeNull();
 });
@@ -522,7 +523,10 @@ test('首页多尺寸无横滚，主题变量在实际页面生效', async ({ pa
   for (const width of [360, 768, 1440]) {
     await page.setViewportSize({ width, height: 780 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    if (process.env.CAPTURE_EVIDENCE) await page.screenshot({ path: `docs/evidence/catalog-${width}.png`, fullPage: true });
+    if (process.env.CAPTURE_EVIDENCE) {
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await page.screenshot({ path: `docs/evidence/catalog-${width}.png`, fullPage: true });
+    }
   }
   await page.evaluate(() => {
     document.documentElement.style.setProperty('--site-accent', '#123456');
