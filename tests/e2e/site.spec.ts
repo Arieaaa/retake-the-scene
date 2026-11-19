@@ -277,6 +277,68 @@ for (const operation of ['turn202', 'turn409', 'retry-read', 'fallback', 'fork',
   }
 }
 
+for (const responseStatus of [200, 202]) {
+  test(`站点模拟：${responseStatus}回执前立即显示原动作与台词`, async ({ page }, testInfo) => {
+    const ready = structuredClone(previewViews.consent);
+    let current = ready;
+    let release!: () => void;
+    const reply = new Promise<void>(resolve => { release = resolve; });
+    let received!: () => void;
+    const receivedTurn = new Promise<void>(resolve => { received = resolve; });
+    const inputs: TurnInput[] = [];
+    let polls = 0;
+    const text = '我想说：<b>请你亲手确认署名</b>。';
+    await page.route(api, async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith('/episodes')) return route.fulfill({ json: episodes });
+      if (path.endsWith('/turns')) {
+        const input = route.request().postDataJSON() as TurnInput;
+        inputs.push(input);
+        received();
+        await reply;
+        if (responseStatus === 200) {
+          current = structuredClone(previewViews.ended);
+          return route.fulfill({ json: current });
+        }
+        current = { ...ready, status: 'pending', choices: [], activeRequest: { requestId: input.requestId, actionId: input.actionId, label: '把电脑交给她编辑', startedAt: Date.now(), allowFallback: true } };
+        return route.fulfill({ status: 202, json: { requestId: input.requestId, status: 'pending', pollUrl: `${path}/${input.requestId}` } });
+      }
+      if (path.includes('/turns/')) {
+        polls++;
+        return route.fulfill({ status: 202, json: { requestId: current.activeRequest!.requestId, status: 'pending', pollUrl: path } });
+      }
+      return route.fulfill({ json: current });
+    });
+    await page.goto(`${origin}/#/play/${ready.runId}/${ready.branchId}`);
+    await expect(page.locator('[data-action="lend_laptop"]')).toBeEnabled();
+    await page.locator('[data-action="lend_laptop"]').locator('..').getByRole('button', { name: '换一句自己的话' }).click();
+    await page.getByLabel('你的台词').fill(text);
+    await page.getByRole('button', { name: '确认收件人与发送' }).click();
+    await receivedTurn;
+    await expect(page.locator('dialog')).toHaveCount(0);
+    await expect(page.locator('.submission-panel')).toBeFocused();
+    await expect(page.locator('.dialogue-line p')).toHaveText(ready.visibleEvents.map(event => event.text));
+    await expect(page.locator('.submission-panel')).toContainText('正在提交你的动作');
+    await expect(page.locator('.submission-panel')).toContainText('把电脑交给她编辑');
+    await expect(page.locator('.submission-panel')).toContainText('编剧 · 控台');
+    await expect(page.locator('.submission-text')).toHaveText(text);
+    await expect(page.locator('.submission-text b')).toHaveCount(0);
+    await expect(page.locator('.submission-panel')).toContainText('尚未收到回执');
+    await expect(page.locator('[data-action="offer_mic"]')).toBeDisabled();
+    await expect(page.locator('.pending-panel')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '用编剧预写接下去' })).toHaveCount(0);
+    expect(polls).toBe(0);
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].params).toEqual({ target: 'writer', text });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('submitting-action.png'), fullPage: true });
+    release();
+    if (responseStatus === 200) await expect(page.locator('.scene-title h1')).toHaveText('婚礼现场返工版');
+    else await expect(page.locator('.pending-panel')).toContainText('把电脑交给她编辑');
+    await expect(page.locator('.submission-panel')).toHaveCount(0);
+  });
+}
+
 test('站点模拟：202刷新恢复和预写竞争只提交原请求', async ({ page }) => {
   const ready = structuredClone(previewViews.ready);
   const completed: PlayerView = { ...structuredClone(previewViews.rewind), runId: ready.runId, branchId: ready.branchId, revision: 1, branches: ready.branches };
@@ -338,6 +400,8 @@ test('站点模拟：断网后重试保留requestId与玩家原选择', async ({
   await expect(page.locator('[data-action="preview_tail"]')).toBeEnabled();
   await page.locator('[data-action="preview_tail"]').click();
   await expect(page.getByRole('alert')).toContainText('网络');
+  await expect(page.locator('.submission-panel')).toContainText('这次操作尚未确认');
+  await expect(page.locator('.submission-panel')).toContainText('拖到片尾预览');
   await expect(page.locator('[data-action="hold_photos"]')).toBeDisabled();
   await page.getByRole('button', { name: '重试原操作' }).click();
   await expect(page.locator('[data-action="private_preview"]')).toBeEnabled();

@@ -144,10 +144,12 @@ main { min-height: 65vh; outline: none; }
 .share-fallback, .cover-feedback { font-size: 14px; line-height: 1.7; color: var(--site-muted); }
 .share-fallback input { font-size: 16px; }
 .cover-feedback { margin-bottom: 0; }
-.pending-panel { margin-top: 24px; padding: 22px; background: var(--site-surface); border-radius: var(--site-radius); }
-.pending-panel > div:first-child { display: flex; gap: 9px; align-items: center; color: var(--site-accent); font-size: 13px; }
-.pending-panel p { font-size: 12px; }
-.pending-panel small { color: var(--site-muted); font-size: 10px; }
+.pending-panel, .submission-panel { margin-top: 24px; padding: 22px; background: var(--site-surface); border-radius: var(--site-radius); }
+.pending-panel > div:first-child, .submission-panel > div:first-child { display: flex; gap: 9px; align-items: center; color: var(--site-accent); font-size: 13px; }
+.pending-panel p, .submission-panel p { font-size: 12px; }
+.pending-panel small, .submission-panel small { color: var(--site-muted); font-size: 10px; }
+.submission-panel { margin: 0 0 16px; border: 1px solid var(--site-border); }
+.submission-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .spin { animation: spin calc(1.2s * var(--site-motion)) linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-block { min-height: 280px; display: flex; gap: 14px; flex-direction: column; align-items: center; justify-content: center; color: var(--site-muted); font-size: 14px; }
@@ -323,7 +325,7 @@ dialog > .primary-button { width: 100%; }
   .choice b { font-size: 16px; }
   .choice small { font-size: 11px; }
   .say-button { font-size: 11px; }
-  .pending-panel p { font-size: 14px; }
+  .pending-panel p, .submission-panel p { font-size: 14px; }
   .primary-button, .secondary-button { font-size: 13px; }
   .last-line { font-size: 17px; }
   .dual-chats { grid-template-columns: 1fr; padding: 12px; }
