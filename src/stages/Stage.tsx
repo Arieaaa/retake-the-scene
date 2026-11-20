@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { Play, Phone, Volume2, MessageSquare, ArrowLeft } from 'lucide-react';
 import type { PlayerView } from '../../shared/contracts';
 import Art from './Art';
+import WordBoard from './WordBoard';
 
-export default function Stage({ view, onSound }: { view: PlayerView; onSound: () => void }) {
+export default function Stage({ view, onSound, disabled, onAction }: { view: PlayerView; onSound: () => void; disabled: boolean; onAction: (actionId: string, params: Record<string, string>) => void }) {
   const [chat, setChat] = useState('soda');
   const [frame, setFrame] = useState(0);
   const [screen, setScreen] = useState(false);
@@ -41,7 +42,8 @@ export default function Stage({ view, onSound }: { view: PlayerView; onSound: ()
         {view.ending?.id === 'hiss.duet' && <><p className="duet-title">{p.duetTitle}</p><div className="duet-layout"><span>玩家录像在左<br />{playerSpeech ?? '特邀嘉宾负责挨哈'}</span><span>原版在右<br />猫：哈——</span></div></>}
       </div>
     </>}
-    {view.episodeId === 'reply' && <>
+    {view.wordPlay && <WordBoard view={view} disabled={disabled} onAction={onAction} />}
+    {view.episodeId === 'reply' && view.ending?.id !== 'reply.wordplay' && <>
       <div className="group-bar"><MessageSquare size={16} /><b>十年老群</b><span>38 人</span></div>
       <div className="clip-player"><Art episode="reply" view={view} frame={view.ending?.id === 'reply.class' ? 2 : frame} changed={screen} /><span className="clip-name">{view.ending?.id === 'reply.bucket' ? '最终版别发这个.gif' : view.ending?.id === 'reply.screen' ? '球局已齐 · 九个队友和你' : view.ending?.id === 'reply.class' ? '原题恢复 · 订正接龙' : '牢大最后一投.gif'}</span><span className="frame-label">{view.ending ? '最后一个镜头' : view.stage >= 2 ? `关键帧 ${frame + 1} / 3` : '原图停在筐沿'}</span></div>
       {view.stage >= 2 && !view.ending && <div className="frame-controls" aria-label="查看原创动图关键帧">{['打铁', '桶左移', '纸背原题'].map((label, i) => <button key={label} aria-pressed={frame === i} onClick={() => setFrame(i)}>{label}</button>)}</div>}

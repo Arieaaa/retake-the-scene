@@ -367,7 +367,7 @@ test('站点模拟：另开期间回片单，迟到响应不覆盖路由或旧�
   const request = page.waitForRequest(request => request.method() === 'POST');
   await page.getByRole('button', { name: '另开一局', exact: true }).click();
   await request;
-  await page.getByRole('button', { name: '这集我来演，返回片单' }).click();
+  await page.getByRole('button', { name: '退出舞台', exact: true }).click();
   await expect(page.locator('.poster-card')).toHaveCount(5);
   const response = page.waitForResponse(response => response.request().method() === 'POST');
   release();
@@ -763,7 +763,7 @@ for (const caseId of ['wedding-01', 'office-01', 'romance-02', 'hiss-01', 'reply
       expect(applied).toEqual([]);
       const waitingWrites = structuredClone(writes);
       await keepWaiting.click();
-      await expect(page.getByRole('status')).toContainText('会继续等待，回来时自动查询');
+      await expect(page.locator('.toast[role="status"]')).toContainText('会继续等待，回来时自动查询');
       await expect(pending).toContainText(active.label);
       expect(writes).toEqual(waitingWrites);
       expect(readBranch(store, opening.runId, opening.branchId)).toEqual(opening);

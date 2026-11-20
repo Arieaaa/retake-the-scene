@@ -333,7 +333,7 @@ test('阿圆转发先预览，取消与Escape不落盘，键盘确认只交付�
   await page.setViewportSize({ width: 360, height: 780 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/#/episode/romance');
-  await expect(page.locator('.mode-pill')).toHaveText('编剧预写 · 本机存档');
+  await expect(page.locator('.play-identity small')).toHaveText('编剧预写 · 本机存档');
   await expect(page.locator('[data-action="ask_friend"]')).toBeEnabled();
   await expect(page).toHaveURL(/#\/play\/[^/]+\/[^/]+$/);
   await expect(page.getByLabel('开启声音')).toBeVisible();
@@ -497,7 +497,7 @@ for (const failure of ['unavailable', 'denied'] as const) {
     expect(await page.evaluate(() => localStorage.getItem('retake.authored.v1'))).toBe(saved);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath('share-fallback.png'), fullPage: true });
-    await page.getByRole('button', { name: '这集我来演，返回片单' }).click();
+    await page.getByRole('button', { name: '回片单', exact: true }).click();
     await expect(page.locator('.poster-card')).toHaveCount(5);
     await expect(link).toHaveCount(0);
   });
@@ -544,7 +544,7 @@ for (const outcome of ['success', 'failure'] as const) {
     await page.goto('/#/preview/ended');
     await expect(page.locator('.ending-panel')).toBeVisible();
     await page.getByRole('button', { name: '分享开场' }).click();
-    await page.getByRole('button', { name: '这集我来演，返回片单' }).click();
+    await page.getByRole('button', { name: '回片单', exact: true }).click();
     await expect(page.locator('.poster-card')).toHaveCount(5);
     await page.evaluate(async () => {
       window.dispatchEvent(new Event('settle-clipboard'));

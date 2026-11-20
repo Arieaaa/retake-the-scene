@@ -9,7 +9,23 @@ export async function saveCover(episode: EpisodeSummary, view: PlayerView): Prom
   ctx.fillStyle = '#191d18'; ctx.fillRect(0, 0, 900, 1200);
   ctx.fillStyle = episode.color; ctx.fillRect(60, 60, 780, 710);
   const svg = document.querySelector('.stage svg[data-scene-art]') as SVGSVGElement | null;
-  if (svg) {
+  if (view.wordPlay && view.ending.id === 'reply.wordplay') {
+    const board = view.wordPlay;
+    ctx.fillStyle = '#e3e8c8'; ctx.fillRect(80, 100, 740, 620);
+    ctx.save(); ctx.translate(80, 100);
+    ctx.fillStyle = '#273529'; ctx.font = 'bold 40px sans-serif'; ctx.fillText('1 的文字现场', 30, 55);
+    ctx.font = '28px sans-serif'; ctx.fillText('名单', 75, 112);
+    ctx.strokeStyle = '#6d9e83'; ctx.lineWidth = 4; ctx.strokeRect(382, 230, 266, 170);
+    ctx.fillText(board.effect === 'bridge' ? '横过来 · 挡拆' : '球场', 410, 276);
+    ctx.save(); ctx.font = 'bold 64px Arial,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('0', 0.37 * 740, 0.25 * 620);
+    ctx.fillText('0', 0.19 * 740, 0.8 * 620); ctx.fillText('0', 0.41 * 740, 0.8 * 620);
+    ctx.strokeStyle = '#273529'; ctx.lineWidth = 7; ctx.beginPath(); ctx.moveTo(0.25 * 740, 0.818 * 620); ctx.lineTo(0.35 * 740, 0.818 * 620); ctx.stroke(); ctx.restore();
+    ctx.save(); ctx.translate(board.x * 7.4, board.y * 6.2); ctx.rotate(board.rotation * Math.PI / 180);
+    ctx.fillStyle = '#273529'; ctx.font = 'bold 76px Arial,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('1', 0, 0); ctx.restore();
+    ctx.font = '22px sans-serif'; ctx.fillText(`已发现：${board.discovered.map(effect => ({ ten: '10人名单', bridge: '横向挡拆', equal: '原题等式' })[effect]).join(' / ')}`, 30, 584);
+    ctx.restore();
+  } else if (svg) {
     const copy = svg.cloneNode(true) as SVGSVGElement;
     copy.setAttribute('xmlns', 'http://www.w3.org/2000/svg'); copy.setAttribute('width', '780'); copy.setAttribute('height', '650');
     const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(copy)], { type: 'image/svg+xml' }));

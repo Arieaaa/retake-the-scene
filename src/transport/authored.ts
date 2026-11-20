@@ -21,7 +21,10 @@ export function createAuthoredTransport(delay = 420): GameTransport {
   async function getView(data: Saved, r: string, b: string): Promise<PlayerView> {
     const view = (await engine()).readBranch(data.store, r, b);
     const pending = Object.values(data.pending).find(p => p.runId === r && p.branchId === b);
-    if (pending) { view.status = 'pending'; view.choices = []; view.activeRequest = { requestId: pending.input.requestId, actionId: pending.input.actionId, label: pending.label, startedAt: pending.startedAt, allowFallback: true }; }
+    if (pending) {
+      view.status = 'pending'; view.choices = []; delete view.freePlay;
+      view.activeRequest = { requestId: pending.input.requestId, actionId: pending.input.actionId, label: pending.label, startedAt: pending.startedAt, allowFallback: pending.input.actionId !== 'free_dialogue' };
+    }
     return view;
   }
   async function finish(r: string, b: string, id: string, force = false) {
@@ -30,6 +33,7 @@ export function createAuthoredTransport(delay = 420): GameTransport {
       const key = `${r}/${b}/${id}`;
       const pending = data.pending[key];
       if (!pending) return (await engine()).readBranch(data.store, r, b);
+      if (force && pending.input.actionId === 'free_dialogue') throw new GameError('ACTION_UNAVAILABLE', '自由输入只有本机原文回显，不能切换成预写 NPC 回复。', false, 422);
       if (!force && Date.now() < pending.due) return { requestId: id, status: 'pending' as const, pollUrl: '' };
       const view = (await engine()).submitTurn(data.store, r, b, pending.input);
       delete data.pending[key];
@@ -51,9 +55,13 @@ export function createAuthoredTransport(delay = 420): GameTransport {
       }
       const current = (await engine()).readBranch(data.store, r, b);
       const completed = (await engine()).submitTurn(structuredClone(data.store), r, b, input);
-      if (completed.revision === current.revision) return completed;
+      if (completed.revision <= current.revision) return completed;
       const startedAt = Date.now();
-      data.pending[`${r}/${b}/${input.requestId}`] = { runId: r, branchId: b, input, due: startedAt + delay, startedAt, label: current.choices.find(c => c.actionId === input.actionId)?.label ?? input.actionId };
+      const label = input.actionId === 'move_one' ? '移动数字 1'
+        : input.actionId === 'finish_wordplay' ? '以当前文字组合谢幕'
+        : input.actionId === 'free_dialogue' ? `本机记录 · ${current.freePlay?.targets.find(target => target.id === input.params.target && target.channel === input.params.channel)?.label ?? input.params.target}`
+        : current.choices.find(c => c.actionId === input.actionId)?.label ?? input.actionId;
+      data.pending[`${r}/${b}/${input.requestId}`] = { runId: r, branchId: b, input, due: startedAt + delay, startedAt, label };
       save(data);
       return { requestId: input.requestId, status: 'pending' as const, pollUrl: '' };
     }),

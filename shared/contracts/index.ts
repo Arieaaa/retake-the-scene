@@ -1,4 +1,4 @@
-export const CONTRACT_VERSION = '1.0';
+export const CONTRACT_VERSION = '1.1';
 export const SCRIPT_VERSION = '1.0.0';
 export type EpisodeId = 'wedding' | 'office' | 'romance' | 'hiss' | 'reply';
 export type Status = 'ready' | 'pending' | 'ended';
@@ -10,6 +10,20 @@ export interface Choice {
   hint?: string;
   control: 'button' | 'message' | 'gesture';
   targets?: { id: string; label: string; channel: string }[];
+}
+export type WordEffect = 'none' | 'ten' | 'bridge' | 'equal';
+export interface WordPlay {
+  x: number;
+  y: number;
+  rotation: 0 | 90;
+  effect: WordEffect;
+  discovered: Exclude<WordEffect, 'none'>[];
+}
+export interface FreePlay {
+  actionId: string;
+  maxLength: number;
+  responseMode: 'local_echo' | 'live';
+  targets: NonNullable<Choice['targets']>;
 }
 export interface VisibleEvent {
   eventId: string;
@@ -46,6 +60,8 @@ export interface PlayerView {
   activeRequest: ActiveRequest | null;
   ending: Ending | null;
   presentation: Record<string, string | boolean | number>;
+  wordPlay?: WordPlay;
+  freePlay?: FreePlay;
 }
 export interface EpisodeSummary { id: EpisodeId; title: string; shortTitle: string; role: string; cta: string; poster: string; color: string; version: string; hook: string; number: string; genre: string }
 export interface TurnInput { requestId: string; expectedRevision: number; stage: number; actionId: string; params: Params }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import acceptance from '../五剧十五结局-验收样例.json';
-import { GameError, SCRIPT_VERSION, type EpisodeId, type Params, type PlayerView, type TurnInput } from '../shared/contracts';
+import { CONTRACT_VERSION, GameError, SCRIPT_VERSION, type EpisodeId, type Params, type PlayerView, type TurnInput } from '../shared/contracts';
+import { WORD_ZONES, wordEffect } from '../shared/wordplay';
 import { episodes, episodePackages } from '../content/episodes';
 import { createRun, emptyStore, forkBranch, readBranch, submitTurn, type AuthoredStore } from '../fixtures/authored-engine';
 import { previewViews } from '../fixtures/public/views';
@@ -531,6 +532,284 @@ describe('malformed and illegal operations have no side effects', () => {
     assertRejected(store, () => turn(store, ended, 'play_original'));
     assertRejected(store, () => forkBranch(store, ended.runId, ended.branchId, 'missing-checkpoint', 'bad-fork'));
     assertRejected(store, () => forkBranch(store, ended.runId, ended.branchId, ended.checkpoints[0].id, ''));
+  });
+});
+
+describe('public wordplay geometry and rule-owned poses', () => {
+  const move = (store: AuthoredStore, view: PlayerView, x: number, y: number, rotation: 0 | 90) =>
+    turn(store, view, 'move_one', { x: String(x), y: String(y), rotation: String(rotation) });
+
+  it('extends only the contract version, preserving the original script oracle', () => {
+    expect(CONTRACT_VERSION).toBe('1.1');
+    expect(SCRIPT_VERSION).toBe('1.0.0');
+    expect(WORD_ZONES).toEqual([
+      { id: 'ten', x: 28, y: 25, width: 32, height: 22, rotation: 0 },
+      { id: 'bridge', x: 70, y: 50, width: 32, height: 20, rotation: 90 },
+      { id: 'equal', x: 30, y: 78, width: 34, height: 20, rotation: 90 },
+    ]);
+  });
+  for (const zone of WORD_ZONES) {
+    it(`${zone.id}: uses inclusive centered bounds and requires the correct orientation`, () => {
+      for (const x of [zone.x - zone.width / 2, zone.x, zone.x + zone.width / 2]) {
+        for (const y of [zone.y - zone.height / 2, zone.y, zone.y + zone.height / 2]) {
+          expect(wordEffect(x, y, zone.rotation)).toBe(zone.id);
+        }
+      }
+      expect(wordEffect(zone.x, zone.y, zone.rotation === 0 ? 90 : 0)).toBe('none');
+      expect(wordEffect(zone.x + zone.width / 2 + 0.01, zone.y, zone.rotation)).toBe('none');
+      expect(wordEffect(zone.x, zone.y - zone.height / 2 - 0.01, zone.rotation)).toBe('none');
+      const { store, view } = start('reply');
+      expect(view.wordPlay).toEqual({ x: 50, y: 90, rotation: 0, effect: 'none', discovered: [] });
+      const moved = move(store, view, zone.x, zone.y, zone.rotation);
+      expect(moved.wordPlay).toEqual({ x: zone.x, y: zone.y, rotation: zone.rotation, effect: zone.id, discovered: [zone.id] });
+      expect(moved).toMatchObject({ status: 'ready', stage: 1, revision: 1, ending: null, inventory: [] });
+      expect(moved.checkpoints).toHaveLength(1);
+      expect(moved.choices).toEqual(view.choices);
+      const delta = moved.visibleEvents.slice(view.visibleEvents.length);
+      expect(delta.map(event => event.kind)).toEqual(['word_moved', 'word_effect', 'dialogue']);
+      expect(delta[0]).toMatchObject({ actorId: 'player', source: 'rules' });
+      expect(delta[1]).toMatchObject({ actorId: 'word_rules', source: 'rules', causeIds: [delta[0].eventId] });
+      expect(delta[2]).toMatchObject({ source: 'authored', causeIds: [delta[1].eventId] });
+      expect(moved.presentation.firstChangedEventId).toBe(delta[1].eventId);
+      expect({ ...moved.presentation, firstChangedEventId: undefined }).toEqual({ ...view.presentation, firstChangedEventId: undefined });
+      assertCausalLog(moved);
+      const wrong = move(store, moved, zone.x, zone.y, zone.rotation === 0 ? 90 : 0);
+      expect(wrong.wordPlay?.effect).toBe('none');
+      expect(wrong.wordPlay?.discovered).toEqual([zone.id]);
+      expect(wrong.visibleEvents.at(-2)?.text).toContain('已解除');
+    });
+  }
+  it('persists arbitrary off-zone positions, reversible rotations and unique branch discoveries until explicit finish', () => {
+    const { store, view: initial } = start('reply');
+    expect(wordEffect(NaN, 25, 0)).toBe('none');
+    expect(wordEffect(28, Infinity, 0)).toBe('none');
+    assertRejected(store, () => turn(store, initial, 'finish_wordplay'));
+    let view = move(store, initial, 28, 25, 0);
+    view = move(store, view, 70, 50, 90);
+    expect(view.visibleEvents.at(-2)?.text).toContain('已解除「10人名单」');
+    view = move(store, view, 30, 78, 90);
+    view = move(store, view, 88.125, 9.625, 90);
+    expect(view.wordPlay).toEqual({ x: 88.125, y: 9.625, rotation: 90, effect: 'none', discovered: ['ten', 'bridge', 'equal'] });
+    const restored = JSON.parse(JSON.stringify(store)) as AuthoredStore;
+    expect(readBranch(restored, view.runId, view.branchId)).toEqual(view);
+    assertRejected(store, () => turn(store, view, 'finish_wordplay'));
+    view = move(store, view, 5, 95, 0);
+    expect(view.wordPlay).toMatchObject({ x: 5, y: 95, effect: 'none' });
+    view = move(store, view, 70, 50, 90);
+    expect(view.wordPlay?.discovered).toEqual(['ten', 'bridge', 'equal']);
+    expect(view.status).toBe('ready');
+    assertRejected(store, () => turn(store, view, 'finish_wordplay', { text: '伪造结局' }));
+    const ended = turn(store, view, 'finish_wordplay');
+    expect(ended).toMatchObject({ status: 'ended', stage: 1, revision: 7, choices: [], inventory: [], ending: { id: 'reply.wordplay', title: '这次，1 不止一种意思' } });
+    expect(ended.wordPlay).toEqual(view.wordPlay);
+    expect(ended.ending?.text).toContain('当前保留：横过来挡拆');
+    for (const text of ['10人名单', '横过来挡拆', '把0－0变成0＝0唤醒订正接龙']) {
+      expect(ended.ending?.text).toContain(text);
+      expect(ended.ending?.line).toContain(text);
+    }
+    expect(ended.visibleEvents.slice(view.visibleEvents.length).map(event => event.kind)).toEqual(['wordplay_finished', 'wordplay_ended']);
+    expect(ended.visibleEvents.at(-1)?.source).toBe('rules');
+    expect(ended.branches[0].endingTitle).toBe(ended.ending?.title);
+    expect(ended.presentation.firstChangedEventId).toBe(view.presentation.firstChangedEventId);
+    expect(readBranch(store, ended.runId, ended.branchId)).toEqual(ended);
+    assertRejected(store, () => move(store, ended, 28, 25, 0));
+    assertRejected(store, () => turn(store, ended, 'finish_wordplay'));
+    assertCausalLog(ended);
+  });
+  it('deduplicates committed poses, rejects same-pose no-ops and conflicting fingerprints atomically', () => {
+    const { store, view } = start('reply');
+    const request = input(view, 'move_one', { x: '28', y: '25', rotation: '0' }, 'pose-request');
+    const first = submitTurn(store, view.runId, view.branchId, request);
+    const second = move(store, first, 70, 50, 90);
+    const before = JSON.stringify(store);
+    expect(submitTurn(store, view.runId, view.branchId, { ...request, params: { rotation: '0', y: '25', x: '28' } })).toEqual(first);
+    expect(JSON.stringify(store)).toBe(before);
+    assertRejected(store, () => submitTurn(store, view.runId, view.branchId, { ...request, params: { ...request.params, x: '29' } }), 409);
+    assertRejected(store, () => move(store, view, 30, 78, 90), 409);
+    assertRejected(store, () => move(store, second, 70, 50, 90));
+    assertRejected(store, () => turn(store, second, 'move_one', { x: '28', y: '25', rotation: '0' }, 'pose-request'), 409);
+  });
+  it('rejects malformed coordinates and forged fields without mutation', () => {
+    const { store, view } = start('reply');
+    const pose = { x: '28', y: '25', rotation: '0' };
+    for (const field of ['x', 'y']) for (const value of ['NaN', 'Infinity', '-Infinity', '1e999', '4.999', '95.001', '', ' ', '28px']) {
+      assertRejected(store, () => turn(store, view, 'move_one', { ...pose, [field]: value }));
+    }
+    for (const params of [
+      { x: '28', y: '25' }, { ...pose, rotation: '45' }, { ...pose, rotation: '90.0' },
+      { ...pose, effect: 'equal' }, { ...pose, text: '1' }, { ...pose, target: 'rep' },
+      { ...pose, channel: 'group' }, { ...pose, discovered: 'equal' },
+    ] as Params[]) assertRejected(store, () => turn(store, view, 'move_one', params));
+    for (const value of [NaN, Infinity, 28]) assertRejected(store, () => turn(store, view, 'move_one', { ...pose, x: value } as unknown as Params));
+    store.runs[view.runId].branches[view.branchId].state.status = 'pending';
+    assertRejected(store, () => move(store, view, 28, 25, 0));
+  });
+  it('rewinds poses and discoveries, isolates forks, and retains poses through the legacy ending', () => {
+    const { store, view } = start('reply');
+    const first = move(store, view, 28, 25, 0);
+    const second = move(store, first, 70, 50, 90);
+    const ended = turn(store, second, 'finish_wordplay');
+    const restored = JSON.parse(JSON.stringify(store)) as AuthoredStore;
+    const fork = forkBranch(restored, ended.runId, ended.branchId, ended.checkpoints[1].id, 'pose-fork');
+    expect(fork.wordPlay).toEqual(first.wordPlay);
+    expect(fork.visibleEvents).toEqual(first.visibleEvents);
+    const alternate = move(restored, fork, 30, 78, 90);
+    expect(alternate.wordPlay?.discovered).toEqual(['ten', 'equal']);
+    expect(readBranch(restored, ended.runId, ended.branchId).wordPlay?.discovered).toEqual(['ten', 'bridge']);
+    const beginning = forkBranch(restored, ended.runId, ended.branchId, ended.checkpoints[0].id, 'pose-start');
+    expect(beginning.wordPlay).toEqual(view.wordPlay);
+    expect(beginning.presentation).not.toHaveProperty('firstChangedEventId');
+    const stage2 = turn(restored, alternate, 'quote_clip');
+    const moved2 = move(restored, stage2, 80, 10, 0);
+    expect(moved2.stage).toBe(2);
+    const stage3 = turn(restored, moved2, 'inspect_bucket');
+    const moved3 = move(restored, stage3, 70, 50, 90);
+    expect(moved3.stage).toBe(3);
+    const legacy = turn(restored, moved3, 'reply_clip');
+    expect(legacy.ending?.id).toBe('reply.bucket');
+    expect(legacy.wordPlay).toEqual(moved3.wordPlay);
+    assertRejected(restored, () => move(restored, legacy, 30, 78, 90));
+    assertCausalLog(legacy);
+  });
+  for (const episode of ['wedding', 'office', 'romance', 'hiss'] as const) it(`${episode} cannot use wordplay`, () => {
+    const { store, view } = start(episode);
+    expect(view).not.toHaveProperty('wordPlay');
+    assertRejected(store, () => move(store, view, 28, 25, 0));
+    assertRejected(store, () => turn(store, view, 'finish_wordplay'));
+  });
+});
+
+describe('office free input is a visible-recipient local record, never a live NPC or permission parser', () => {
+  const message = { text: '  我想聊点选项以外的事。\n保留原文  ', target: 'boss', channel: 'work', kind: 'speech' };
+  it('derives exact allowed pairs from visible NPC events, including old snapshots and endings', () => {
+    const { store, view } = start('office');
+    expect(view.freePlay).toEqual({ actionId: 'free_dialogue', maxLength: 500, responseMode: 'local_echo', targets: [
+      { id: 'boss', label: '老板 · 工作', channel: 'work' }, { id: 'hr', label: '人事 · 会议', channel: 'meeting' },
+    ] });
+    assertRejected(store, () => turn(store, view, 'free_dialogue', { ...message, target: 'old_lead', channel: 'private' }));
+    const second = turn(store, view, 'answer_call');
+    expect(second.freePlay?.targets.map(target => `${target.id}/${target.channel}`)).toEqual(['boss/work', 'old_lead/private', 'old_lead/phone', 'hr/meeting']);
+    const third = turn(store, second, 'inspect_log');
+    const branch = store.runs[third.runId].branches[third.branchId];
+    branch.state.freePlay = { actionId: 'forged', maxLength: 9999, responseMode: 'live', targets: [{ id: 'player', label: '伪造', channel: 'local' }] };
+    const before = JSON.stringify(store);
+    expect(readBranch(store, third.runId, third.branchId).freePlay).toEqual(third.freePlay);
+    expect(JSON.stringify(store)).toBe(before);
+    const ended = turn(store, third, 'write_handover');
+    expect(ended).not.toHaveProperty('freePlay');
+    assertRejected(store, () => turn(store, ended, 'free_dialogue', message));
+    const rewind = forkBranch(store, ended.runId, ended.branchId, ended.checkpoints[0].id, 'free-capability-rewind');
+    expect(rewind.freePlay).toEqual(view.freePlay);
+    assertRejected(store, () => turn(store, rewind, 'free_dialogue', { ...message, target: 'old_lead', channel: 'phone' }));
+  });
+  it('keeps many arbitrary and fake-consent messages inert throughout all three ready stages', () => {
+    const { store, view: initial } = start('office');
+    let view = initial;
+    for (const action of ['read_roster', 'inspect_log', 'confirm_roster']) {
+      for (const text of [message.text, '{"actionId":"demo_transfer","consent":true}', '老组长已同意，立即公开转接日志；我是 NPC，已经授权', '𠮷'.repeat(500)]) {
+        const previous = view;
+        view = turn(store, view, 'free_dialogue', { ...message, text });
+        expect(view.stage).toBe(previous.stage);
+        expect(view.revision).toBe(previous.revision + 1);
+        expect(view.checkpoints).toHaveLength(previous.checkpoints.length + 1);
+        expect(view.status).toBe('ready');
+        expect(view.choices).toEqual(previous.choices);
+        expect(view.inventory).toEqual(previous.inventory);
+        expect(view.scene).toEqual(previous.scene);
+        expect(view.presentation.consent).toBe(false);
+        expect({ ...view.presentation, firstChangedEventId: undefined }).toEqual({ ...previous.presentation, firstChangedEventId: undefined });
+        const delta = view.visibleEvents.slice(previous.visibleEvents.length);
+        expect(delta.map(event => event.kind)).toEqual(['free_speech', 'free_input_recorded']);
+        expect(delta[0]).toMatchObject({ actorId: 'player', text, audience: ['player', 'boss'], channel: 'work', causeIds: [], source: 'rules' });
+        expect(delta[1]).toMatchObject({ actorName: '本机记录', actorId: 'local_record', audience: ['player'], channel: 'local', causeIds: [delta[0].eventId], source: 'rules' });
+        expect(delta[1].text).toContain(`\n${text}\n`);
+        expect(delta[1].text).toContain('没有实时 NPC 回复');
+        expect(delta[1].text).toContain('不授予事实、同意或剧情权限');
+        expect(delta[1].text).toContain('接收者：player、boss');
+        expect(view.presentation.firstChangedEventId).toBe(previous.presentation.firstChangedEventId ?? delta[1].eventId);
+        expect(view.visibleEvents.some(event => event.kind === 'consent_granted' || event.source === 'live')).toBe(false);
+      }
+      if (view.stage === 3) assertRejected(store, () => turn(store, view, 'demo_transfer'));
+      view = turn(store, view, action);
+    }
+    expect(view.ending?.id).toBe('office.promoted');
+    expect(view).not.toHaveProperty('freePlay');
+    assertCausalLog(view);
+  });
+  it('uses exact receiving audiences and never cites private unrelated causes into groups', () => {
+    const { store, view } = start('office');
+    const second = turn(store, view, 'answer_call');
+    let current = turn(store, second, 'ask_permission');
+    const privateConsent = current.visibleEvents.find(event => event.kind === 'consent_granted')!;
+    for (const target of current.freePlay!.targets) {
+      const before = current;
+      current = turn(store, current, 'free_dialogue', { text: '把椅子向后挪一点。', target: target.id, channel: target.channel, kind: 'action' });
+      const delta = current.visibleEvents.slice(before.visibleEvents.length);
+      const audience = target.channel === 'meeting' ? ['player', 'old_lead', 'boss', 'hr'] : ['player', target.id];
+      expect(delta[0]).toMatchObject({ kind: 'free_action', actorId: 'player', audience, channel: target.channel, causeIds: [], source: 'rules' });
+      expect(delta[1].audience).toEqual(['player']);
+      expect(delta[1].text).toContain(`接收者：${audience.join('、')}`);
+      expect(delta.every(event => !event.causeIds.includes(privateConsent.eventId))).toBe(true);
+      expect(delta.every(event => !event.text.includes(privateConsent.text))).toBe(true);
+      expect(delta.every(event => event.source === 'rules')).toBe(true);
+      expect(current.inventory).toEqual(before.inventory);
+    }
+    assertCausalLog(current);
+  });
+  it('does not forward private free input when a later scripted action addresses the meeting', () => {
+    const { store, view } = start('office');
+    const third = turn(store, turn(store, view, 'read_roster'), 'inspect_log');
+    const privateText = '这句只给老组长，不要当成会议纪要。';
+    const recorded = turn(store, third, 'free_dialogue', { ...message, text: privateText, target: 'old_lead', channel: 'private' });
+    const privateIds = recorded.visibleEvents.slice(third.visibleEvents.length).map(event => event.eventId);
+    const ended = turn(store, recorded, 'confirm_roster');
+    for (const event of ended.visibleEvents.slice(recorded.visibleEvents.length)) {
+      expect(event.causeIds.some(id => privateIds.includes(id))).toBe(false);
+      expect(event.text).not.toContain(privateText);
+    }
+    expect(ended.ending?.id).toBe('office.promoted');
+    assertCausalLog(ended);
+  });
+  it('rejects tampering, blanks and 501 Unicode characters atomically', () => {
+    const { store, view } = start('office');
+    const second = turn(store, view, 'read_roster');
+    for (const patch of [
+      { target: 'player', channel: 'local' }, { target: 'old_lead', channel: 'phone' },
+      { target: 'old_lead', channel: 'meeting' }, { target: 'boss', channel: 'meeting' },
+      { target: 'hr', channel: 'work' }, { channel: 'private' }, { kind: 'consent' },
+      { text: '' }, { text: ' \n\t' }, { text: '𠮷'.repeat(501) }, { effect: 'ten' }, { consent: 'true' },
+    ] as Params[]) assertRejected(store, () => turn(store, second, 'free_dialogue', { ...message, ...patch }));
+    for (const name of Object.keys(message)) {
+      const params: Params = { ...message }; delete params[name];
+      assertRejected(store, () => turn(store, second, 'free_dialogue', params));
+    }
+    store.runs[second.runId].branches[second.branchId].state.status = 'pending';
+    expect(readBranch(store, second.runId, second.branchId)).not.toHaveProperty('freePlay');
+    assertRejected(store, () => turn(store, second, 'free_dialogue', message));
+  });
+  it('replays free input, restores saved routing and rewinds without future logs or capabilities', () => {
+    const { store, view } = start('office');
+    const request = input(view, 'free_dialogue', message, 'free-request');
+    const first = submitTurn(store, view.runId, view.branchId, request);
+    const second = turn(store, first, 'answer_call');
+    const third = turn(store, second, 'free_dialogue', { ...message, target: 'old_lead', channel: 'phone' });
+    const restored = JSON.parse(JSON.stringify(store)) as AuthoredStore;
+    expect(readBranch(restored, third.runId, third.branchId)).toEqual(third);
+    const before = JSON.stringify(restored);
+    expect(submitTurn(restored, view.runId, view.branchId, request)).toEqual(first);
+    expect(JSON.stringify(restored)).toBe(before);
+    assertRejected(restored, () => submitTurn(restored, view.runId, view.branchId, { ...request, params: { ...message, text: 'changed' } }), 409);
+    const fork = forkBranch(restored, third.runId, third.branchId, third.checkpoints[0].id, 'free-fork');
+    expect(fork.visibleEvents).toEqual(view.visibleEvents);
+    expect(fork.freePlay).toEqual(view.freePlay);
+    expect(fork.presentation).not.toHaveProperty('firstChangedEventId');
+    expect(turn(restored, fork, 'free_dialogue', { ...message, text: '另一条分支' }).stage).toBe(1);
+    expect(readBranch(restored, third.runId, third.branchId).visibleEvents).toEqual(third.visibleEvents);
+  });
+  for (const episode of ['wedding', 'romance', 'hiss', 'reply'] as const) it(`${episode} has no free input capability`, () => {
+    const { store, view } = start(episode);
+    expect(view).not.toHaveProperty('freePlay');
+    assertRejected(store, () => turn(store, view, 'free_dialogue', message));
   });
 });
 

@@ -1,4 +1,5 @@
-import { GameError, SCRIPT_VERSION, type Checkpoint, type Choice, type EpisodeId, type PlayerView, type TurnInput, type VisibleEvent } from '../shared/contracts';
+import { GameError, SCRIPT_VERSION, type Checkpoint, type Choice, type EpisodeId, type FreePlay, type PlayerView, type TurnInput, type VisibleEvent, type WordPlay } from '../shared/contracts';
+import { wordEffect } from '../shared/wordplay';
 import { episodePackages, replyTargets, type AuthoredAction, type AuthoredLine, type EpisodePackage } from '../content/episodes';
 
 // Plain JSON state. No timers, network, microphone, executable scripts or live actors.
@@ -58,12 +59,29 @@ function choices(state: BranchState): Choice[] {
     ...(state.episodeId === 'reply' && item.id in replyTargets ? { hint: `引用 ${String(state.presentation[`${item.id}ParentMessageId`])} · 正文只能是 1` } : {}),
   }));
 }
+function initialWordPlay(): WordPlay { return { x: 50, y: 90, rotation: 0, effect: 'none', discovered: [] }; }
+function freePlayOf(state: BranchState): FreePlay | undefined {
+  if (state.episodeId !== 'office' || state.status !== 'ready' || ![1, 2, 3].includes(state.stage)) return undefined;
+  const candidates = [
+    { id: 'boss', label: '老板 · 工作', channel: 'work' },
+    { id: 'old_lead', label: '老组长 · 私聊', channel: 'private' },
+    { id: 'old_lead', label: '老组长 · 电话', channel: 'phone' },
+    { id: 'hr', label: '人事 · 会议', channel: 'meeting' },
+  ];
+  const targets = candidates.filter(target => state.visibleEvents.some(event => event.actorId === target.id
+    && event.channel === target.channel && event.audience.includes('player')));
+  return targets.length ? { actionId: 'free_dialogue', maxLength: 500, responseMode: 'local_echo', targets } : undefined;
+}
+const rootKinds = new Set(['player_action', 'reply_sent', 'word_moved', 'wordplay_finished', 'free_speech', 'free_action']);
 function viewOf(run: AuthoredRun, branch: AuthoredBranch): PlayerView {
   // Later forks keep the opening checkpoint; rewinding the first decision clears it.
   const openingCount = branch.checkpoints[0]?.state.visibleEvents.length;
   const firstChangedEvent = openingCount === undefined ? undefined : branch.state.visibleEvents.slice(openingCount)
-    .find(event => event.audience.includes('player') && event.kind !== 'player_action' && event.kind !== 'reply_sent');
+    .find(event => event.audience.includes('player') && !rootKinds.has(event.kind));
   return copy({ ...branch.state,
+    // Derive capabilities even for old saves; ending/pending states cannot retain stale permissions.
+    freePlay: freePlayOf(branch.state),
+    ...(branch.state.episodeId === 'reply' ? { wordPlay: branch.state.wordPlay ?? initialWordPlay() } : {}),
     presentation: { ...branch.state.presentation, ...(firstChangedEvent ? { firstChangedEventId: firstChangedEvent.eventId } : {}) },
     visibleEvents: branch.state.visibleEvents.filter(event => event.audience.includes('player')),
     checkpoints: branch.checkpoints.map(item => item.checkpoint),
@@ -121,6 +139,7 @@ function initialState(episodeId: EpisodeId, runId: string, branchId: string): Br
     presentation: { mode: 'authored', sourceLabel: '作者预演 · 预写对白', creditsUpdated: false, consent: false, playerSpoke: false,
       lastGesture: '', binding: '', sample: '', hissCount: 0, replyTarget: '', armed: false, sent: false },
   };
+  if (episodeId === 'reply') state.wordPlay = initialWordPlay();
   enterStage(state, 1, []);
   if (episodeId === 'romance') {
     state.presentation.friendForwardPreviewEventId = state.visibleEvents.find(event => event.channel === 'soda')!.eventId;
@@ -163,9 +182,46 @@ function fingerprintOf(input: TurnInput) {
   return JSON.stringify({ requestId: input.requestId, expectedRevision: input.expectedRevision, stage: input.stage, actionId: input.actionId,
     params: Object.fromEntries(Object.entries(input.params).sort(([a], [b]) => a.localeCompare(b))) });
 }
-interface ValidatedAction { action: AuthoredAction; target: string; channel: string; parentMessageId?: string; sample?: string; sampleEventId?: string; forwardEventId?: string }
-function validateAction(state: BranchState, input: TurnInput): ValidatedAction {
-  if (state.status === 'ended') invalid('本分支已谢幕，请倒带后再选。');
+interface ValidatedAction { kind: 'authored'; action: AuthoredAction; target: string; channel: string; parentMessageId?: string; sample?: string; sampleEventId?: string; forwardEventId?: string }
+type SpecialAction =
+  | { kind: 'move_one'; label: string; x: number; y: number; rotation: WordPlay['rotation'] }
+  | { kind: 'finish_wordplay'; label: string }
+  | { kind: 'free_dialogue'; label: string; target: FreePlay['targets'][number]; inputKind: 'speech' | 'action' };
+function exactParams(input: TurnInput, names: string[]) {
+  if (Object.keys(input.params).length !== names.length || names.some(name => !Object.hasOwn(input.params, name))) invalid('这个动作需要且只接受指定参数。');
+}
+function coordinate(value: string): number {
+  const number = Number(value);
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value) || !Number.isFinite(number) || number < 5 || number > 95) invalid('坐标必须是 5–95 之间的有限数值。');
+  return number;
+}
+function validateAction(state: BranchState, input: TurnInput): ValidatedAction | SpecialAction {
+  if (state.status !== 'ready') invalid('本分支当前不可操作；已谢幕时请先倒带。');
+  if (input.actionId === 'move_one' || input.actionId === 'finish_wordplay') {
+    if (state.episodeId !== 'reply') invalid('只有数字 1 的舞台允许文字摆放。');
+    const pose = state.wordPlay ?? initialWordPlay();
+    if (input.actionId === 'finish_wordplay') {
+      exactParams(input, []);
+      if (pose.effect === 'none') invalid('先保留一个有效组合，再主动谢幕。');
+      return { kind: 'finish_wordplay', label: '以当前文字组合谢幕' };
+    }
+    exactParams(input, ['x', 'y', 'rotation']);
+    const x = coordinate(input.params.x), y = coordinate(input.params.y);
+    if (input.params.rotation !== '0' && input.params.rotation !== '90') invalid('数字 1 只能直立或旋转 90 度。');
+    const rotation = input.params.rotation === '0' ? 0 : 90;
+    if (pose.x === x && pose.y === y && pose.rotation === rotation) invalid('数字 1 的位置与方向没有变化。');
+    return { kind: 'move_one', label: '移动数字 1', x, y, rotation };
+  }
+  if (input.actionId === 'free_dialogue') {
+    exactParams(input, ['text', 'target', 'channel', 'kind']);
+    const capability = freePlayOf(state);
+    if (!capability) invalid('当前舞台没有自由输入能力。');
+    const target = capability.targets.find(item => item.id === input.params.target && item.channel === input.params.channel);
+    if (!target) invalid('只能向本分支已经看见的指定人物与频道发送。');
+    if (!input.params.text.trim() || Array.from(input.params.text).length > capability.maxLength) invalid('原文必须是 1–500 个字符，不能只有空白。');
+    if (input.params.kind !== 'speech' && input.params.kind !== 'action') invalid('自由输入只能是 speech 或 action。');
+    return { kind: 'free_dialogue', label: `本机记录 · ${target.label}`, target, inputKind: input.params.kind };
+  }
   const action = available(state).find(item => item.id === input.actionId);
   if (!action) invalid('当前幕没有解锁这个动作，或尚未满足前提。');
   const permitted = new Set(['target', 'channel', 'text']);
@@ -183,7 +239,7 @@ function validateAction(state: BranchState, input: TurnInput): ValidatedAction {
   const selected = action.allowedTargets.find(item => item.id === (input.params.target ?? action.allowedTargets[0].id)
     && item.channel === (input.params.channel ?? action.allowedTargets[0].channel));
   if (!selected) invalid('收件人或频道不属于这个动作。');
-  const result: ValidatedAction = { action, target: selected.id, channel: selected.channel };
+  const result: ValidatedAction = { kind: 'authored', action, target: selected.id, channel: selected.channel };
   if (replyRef) {
     if (text !== undefined && text !== '1') invalid('这个角色的正文始终只能是“1”。');
     const parentMessageId = String(state.presentation[`${action.id}ParentMessageId`] ?? '');
@@ -229,7 +285,10 @@ function actionEvent(state: BranchState, input: TurnInput, valid: ValidatedActio
   const kind = valid.parentMessageId ? 'reply_sent' : romanceSend
     ? input.actionId === 'send_original' ? 'draft_sent' : input.actionId === 'disclose_forwarding' ? 'forwarding_disclosed' : 'message_sent'
     : 'player_action';
-  return emit(state, kind, 'player', text, audience, forwarding ? 'local' : valid.channel, causes(...causeIds, valid.parentMessageId));
+  // A later scripted action must not forward a local/private free-input record by causal reference.
+  const observedCauses = causeIds.filter(id => state.visibleEvents.some(event => event.eventId === id
+    && audience.every(actorId => event.audience.includes(actorId))));
+  return emit(state, kind, 'player', text, audience, forwarding ? 'local' : valid.channel, causes(...observedCauses, valid.parentMessageId));
 }
 function finish(state: BranchState, endingId: string, causeIds: string[], actorId: string, audience: string[], channel: string, prop?: string) {
   const content = packageFor(state).endings[endingId];
@@ -467,6 +526,56 @@ function reply(state: BranchState, valid: ValidatedAction, root: VisibleEvent) {
   finish(state, valid.action.endingId!, [effect.eventId], valid.target, groupAudience, 'group', prop);
 }
 
+const wordMeanings: Record<WordPlay['discovered'][number], string> = {
+  ten: '10人名单', bridge: '横过来挡拆', equal: '把0－0变成0＝0唤醒订正接龙',
+};
+function specialTurn(state: BranchState, input: TurnInput, valid: SpecialAction) {
+  if (valid.kind === 'free_dialogue') {
+    const { target } = valid;
+    const audience = target.channel === 'meeting' ? meetingAudience : ['player', target.id];
+    // Free wording has no inferred intent, permissions or private causal context.
+    const root = emit(state, valid.inputKind === 'speech' ? 'free_speech' : 'free_action', 'player', input.params.text, audience, target.channel, []);
+    emit(state, 'free_input_recorded', 'local_record',
+      `本机剧内记录：原文已送达 ${target.label}，频道 ${target.channel}；接收者：${audience.join('、')}。\n${input.params.text}\n仅本机回显，没有实时 NPC 回复；不授予事实、同意或剧情权限，不推进剧情状态。`,
+      ['player'], 'local', [root.eventId], 'rules', '本机记录');
+    return;
+  }
+  const previous = state.wordPlay ?? initialWordPlay();
+  if (valid.kind === 'move_one') {
+    const { x, y, rotation } = valid;
+    const effect = wordEffect(x, y, rotation);
+    const discovered = [...previous.discovered];
+    if (effect !== 'none' && !discovered.includes(effect)) discovered.push(effect);
+    state.wordPlay = { x, y, rotation, effect, discovered };
+    const root = emit(state, 'word_moved', 'player', `把 1 移到 (${x}%, ${y}%)，旋转 ${rotation}°。`, groupAudience, 'group', []);
+    const removed = previous.effect !== 'none' && previous.effect !== effect ? `已解除「${wordMeanings[previous.effect]}」，它不再生效。` : '';
+    const changed = emit(state, 'word_effect', 'word_rules', `${removed}${effect === 'none'
+      ? '当前位置与方向没有组成新意思；只保留数字 1 的位置，已发现的组合仍在记录中。'
+      : `当前生效：${wordMeanings[effect]}。移走或转向后，组合会解除。`}`, groupAudience, 'group', [root.eventId], 'rules', '文字规则');
+    const actor = effect === 'equal' ? 'rep' : effect === 'none' ? 'owner' : 'baller';
+    const line = effect === 'ten' ? '这回 1 站在 0 前面，名单变成 10 人了。先别收走，你还可以继续摆。'
+      : effect === 'bridge' ? '1 横过来挡拆了，这里现在能挡住。挪开可就不算了。'
+      : effect === 'equal' ? '你把 0－0 摆成了 0＝0，订正接龙醒了；这是摆出来的，不是偷看原题。'
+      : `1 现在在 (${x}%, ${y}%)，${rotation === 90 ? '横着' : '竖着'}。${removed ? '刚才的组合散开了。' : ''}这里还没接上，继续挪挪看。`;
+    speak(state, actor, line, groupAudience, 'group', [changed.eventId]);
+    return;
+  }
+  // A separate, rule-generated ending; legacy packages and their three endings remain untouched.
+  state.wordPlay = previous;
+  const current = wordMeanings[previous.effect as WordPlay['discovered'][number]];
+  const history = previous.discovered.map(effect => wordMeanings[effect]).join('；');
+  const root = emit(state, 'wordplay_finished', 'player', `保留「${current}」，主动结束这次文字摆放。`, groupAudience, 'group', []);
+  state.ending = {
+    id: 'reply.wordplay', title: '这次，1 不止一种意思',
+    text: `当前保留：${current}。这个分支已经发现：${history}。这是文字摆放产生的独立结局，不揭示旧文件或私人事实。`,
+    line: `这次的 1 留在「${current}」；一路试出的「${history}」也记下了。`,
+  };
+  state.status = 'ended';
+  state.choices = [];
+  state.scene = { title: state.ending.title, kicker: '谢幕 · 文字规则', text: state.ending.text, prop: state.ending.line };
+  emit(state, 'wordplay_ended', 'word_rules', `${state.ending.text}\n${state.ending.line}`, groupAudience, 'group', [root.eventId], 'rules', '文字规则');
+}
+
 export function submitTurn(store: AuthoredStore, runId: string, branchId: string, input: TurnInput): PlayerView {
   validateInput(input);
   const run = getRun(store, runId), branch = getBranch(run, branchId);
@@ -479,20 +588,24 @@ export function submitTurn(store: AuthoredStore, runId: string, branchId: string
   const valid = validateAction(branch.state, input);
   // All validation and effects happen on a detached draft; rejected turns never mutate store.
   const state = copy(branch.state);
-  const checkpoint: SavedCheckpoint = { checkpoint: { id: uuid(), stage: state.stage, label: `第 ${state.stage} 拍前 · ${valid.action.label}` }, state: copy(state) };
-  let newHiss: VisibleEvent | undefined;
-  if (state.episodeId === 'hiss') {
-    newHiss = emit(state, 'hiss_emitted', 'cat', '哈——朝玩家。target=player', ['player', 'camera'], 'scene', causes(latest(state)));
-    state.presentation.hissCount = Number(state.presentation.hissCount) + 1;
-    state.presentation.hissTarget = 'player';
-    state.presentation.lastHissEventId = newHiss.eventId;
+  const label = valid.kind === 'authored' ? valid.action.label : valid.label;
+  const checkpoint: SavedCheckpoint = { checkpoint: { id: uuid(), stage: state.stage, label: `第 ${state.stage} 拍前 · ${label}` }, state: copy(state) };
+  if (valid.kind !== 'authored') specialTurn(state, input, valid);
+  else {
+    let newHiss: VisibleEvent | undefined;
+    if (state.episodeId === 'hiss') {
+      newHiss = emit(state, 'hiss_emitted', 'cat', '哈——朝玩家。target=player', ['player', 'camera'], 'scene', causes(latest(state)));
+      state.presentation.hissCount = Number(state.presentation.hissCount) + 1;
+      state.presentation.hissTarget = 'player';
+      state.presentation.lastHissEventId = newHiss.eventId;
+    }
+    const root = actionEvent(state, input, valid, newHiss ? [newHiss.eventId] : causes(latest(state)));
+    if (state.episodeId === 'wedding') wedding(state, valid, root);
+    if (state.episodeId === 'office') office(state, valid, root);
+    if (state.episodeId === 'romance') romance(state, input, valid, root);
+    if (state.episodeId === 'hiss') hiss(state, input, valid, root, newHiss!);
+    if (state.episodeId === 'reply') reply(state, valid, root);
   }
-  const root = actionEvent(state, input, valid, newHiss ? [newHiss.eventId] : causes(latest(state)));
-  if (state.episodeId === 'wedding') wedding(state, valid, root);
-  if (state.episodeId === 'office') office(state, valid, root);
-  if (state.episodeId === 'romance') romance(state, input, valid, root);
-  if (state.episodeId === 'hiss') hiss(state, input, valid, root, newHiss!);
-  if (state.episodeId === 'reply') reply(state, valid, root);
   state.revision += 1;
   const next: AuthoredBranch = { ...branch, state, checkpoints: [...branch.checkpoints, checkpoint] };
   const result = viewOf(run, next);
