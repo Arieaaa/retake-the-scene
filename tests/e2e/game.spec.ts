@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import acceptance from '../../五剧十五结局-验收样例.json' with { type: 'json' };
-import type { AuthoredStore } from '../../fixtures/authored-engine';
+import type { GameStore } from '../../server/game/engine';
 import type { TurnInput } from '../../shared/contracts';
 
 for (const scenario of acceptance.cases) {
@@ -342,7 +342,7 @@ test('阿圆转发先预览，取消与Escape不落盘，键盘确认只交付�
     return page.evaluate(() => {
       const saved = localStorage.getItem('retake.authored.v1')!;
       const [, , runId, branchId] = location.hash.split('/');
-      const { store } = JSON.parse(saved) as { store: AuthoredStore };
+      const { store } = JSON.parse(saved) as { store: GameStore };
       const branch = store.runs[runId].branches[branchId];
       return { saved, state: branch.state, inputs: Object.values(branch.requests).map(request => JSON.parse(request.fingerprint) as TurnInput) };
     });

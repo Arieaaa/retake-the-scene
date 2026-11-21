@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test as base, type Page, type Route } from '@playwright/test';
 import { episodes } from '../../content/episodes';
-import { createRun, emptyStore, submitTurn, type AuthoredStore } from '../../fixtures/authored-engine';
+import { createRun, emptyStore, submitTurn, type GameStore } from '../../server/game/engine';
 import type { PlayerView, TurnInput, WordPlay } from '../../shared/contracts';
 
 const test = base.extend<{ diagnostics: void }>({
@@ -21,7 +21,7 @@ const test = base.extend<{ diagnostics: void }>({
 });
 
 type Pose = Pick<WordPlay, 'x' | 'y' | 'rotation'>;
-type Branch = AuthoredStore['runs'][string]['branches'][string];
+type Branch = GameStore['runs'][string]['branches'][string];
 const names = { ten: '10 人签到', bridge: '横过来挡拆', equal: '原题恢复' };
 const initialPose: Pose = { x: 50, y: 90, rotation: 0 };
 const rawSave = (page: Page) => page.evaluate(() => localStorage.getItem('retake.authored.v1'));
@@ -347,6 +347,7 @@ async function installSiteMock(page: Page, initial: PlayerView, current: () => P
   const root = '/functions/v1/app/api';
   const branch = `${root}/runs/${initial.runId}/branches/${initial.branchId}`;
   await page.route('**/functions/v1/app/api/**', async route => {
+    if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (request.method() === 'GET' && path === `${root}/episodes`) return route.fulfill({ json: episodes });

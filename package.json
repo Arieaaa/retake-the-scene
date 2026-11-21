@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "dev:site": "node dev/server.mjs",
+    "build:function": "tsc --noEmit && node scripts/build-function.mjs",
+    "test:backend": "vitest run tests/server",
+    "test:backend:e2e": "playwright test --config playwright.backend.config.ts",
     "build": "npm run build:site",
     "build:site": "tsc --noEmit && VITE_GAME_MODE=site vite build --outDir dist-site && node scripts/check-site-build.mjs",
     "build:authored": "tsc --noEmit && VITE_GAME_MODE=authored vite build",

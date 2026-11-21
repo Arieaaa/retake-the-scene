@@ -5,6 +5,9 @@
 node_modules/
 dist/
 dist-site/
+dist-function/
+.server-data/
+backend-test-results/
 coverage/
 playwright-report/
 test-results/

@@ -1,12 +1,12 @@
 import { GameError, type GameTransport, type PlayerView, type TurnInput } from '../../shared/contracts';
-import type { AuthoredStore } from '../../fixtures/authored-engine';
+import type { GameStore } from '../../server/game/engine';
 
 type Pending = { runId: string; branchId: string; input: TurnInput; due: number; startedAt: number; label: string };
-type Saved = { store: AuthoredStore; pending: Record<string, Pending> };
+type Saved = { store: GameStore; pending: Record<string, Pending> };
 const KEY = 'retake.authored.v1';
 
 export function createAuthoredTransport(delay = 420): GameTransport {
-  const engine = () => import('../../fixtures/authored-engine');
+  const engine = () => import('../../server/game/engine');
   const withLock = async <T,>(task: () => Promise<T>): Promise<T> => navigator.locks ? navigator.locks.request(KEY, task) : task();
   async function load(): Promise<Saved> {
     const api = await engine();

@@ -3,7 +3,7 @@ import acceptance from '../五剧十五结局-验收样例.json';
 import { CONTRACT_VERSION, GameError, SCRIPT_VERSION, type EpisodeId, type Params, type PlayerView, type TurnInput } from '../shared/contracts';
 import { WORD_ZONES, wordEffect } from '../shared/wordplay';
 import { episodes, episodePackages } from '../content/episodes';
-import { createRun, emptyStore, forkBranch, readBranch, submitTurn, type AuthoredStore } from '../fixtures/authored-engine';
+import { createRun, emptyStore, forkBranch, readBranch, submitTurn, type GameStore } from '../server/game/engine';
 import { previewViews } from '../fixtures/public/views';
 
 function start(episodeId: EpisodeId) {
@@ -13,10 +13,10 @@ function start(episodeId: EpisodeId) {
 function input(view: PlayerView, actionId: string, params: Params = {}, requestId = `turn-${view.revision}`): TurnInput {
   return { requestId, expectedRevision: view.revision, stage: view.stage, actionId, params };
 }
-function turn(store: AuthoredStore, view: PlayerView, actionId: string, params: Params = {}, requestId?: string) {
+function turn(store: GameStore, view: PlayerView, actionId: string, params: Params = {}, requestId?: string) {
   return submitTurn(store, view.runId, view.branchId, input(view, actionId, params, requestId));
 }
-function assertRejected(store: AuthoredStore, action: () => unknown, status = 422) {
+function assertRejected(store: GameStore, action: () => unknown, status = 422) {
   const before = JSON.stringify(store);
   let caught: unknown;
   try { action(); } catch (error) { caught = error; }
@@ -76,7 +76,7 @@ describe('15 authored paths from the original acceptance artifact', () => {
       expect(view.presentation.mode).toBe('authored');
       for (const kind of testCase.expected.requiredEvents) expect(view.visibleEvents.map(event => event.kind)).toContain(kind);
       expect(readBranch(store, view.runId, view.branchId)).toEqual(view);
-      const restored = JSON.parse(JSON.stringify(store)) as AuthoredStore;
+      const restored = JSON.parse(JSON.stringify(store)) as GameStore;
       expect(readBranch(restored, view.runId, view.branchId)).toEqual(view);
     });
   }
@@ -126,7 +126,7 @@ describe('first changed event presentation projection', () => {
         const saved = JSON.stringify(store);
         expect(readBranch(store, view.runId, view.branchId)).toEqual(view);
         expect(JSON.stringify(store)).toBe(saved);
-        const restored = JSON.parse(saved) as AuthoredStore;
+        const restored = JSON.parse(saved) as GameStore;
         expect(readBranch(restored, view.runId, view.branchId)).toEqual(view);
         expect(JSON.stringify(restored)).toBe(saved);
       }
@@ -150,7 +150,7 @@ describe('first changed event presentation projection', () => {
         expect(laterFork.visibleEvents.find(event => event.eventId === first.eventId)).toEqual(first);
         const continued = turn(store, laterFork, testCase.turns[index].actionId);
         expect(continued.presentation.firstChangedEventId).toBe(first.eventId);
-        const restored = JSON.parse(JSON.stringify(store)) as AuthoredStore;
+        const restored = JSON.parse(JSON.stringify(store)) as GameStore;
         expect(readBranch(restored, continued.runId, continued.branchId)).toEqual(continued);
       }
       expect(JSON.stringify(store.runs[view.runId].branches[view.branchId])).toBe(originalBranch);
@@ -536,7 +536,7 @@ describe('malformed and illegal operations have no side effects', () => {
 });
 
 describe('public wordplay geometry and rule-owned poses', () => {
-  const move = (store: AuthoredStore, view: PlayerView, x: number, y: number, rotation: 0 | 90) =>
+  const move = (store: GameStore, view: PlayerView, x: number, y: number, rotation: 0 | 90) =>
     turn(store, view, 'move_one', { x: String(x), y: String(y), rotation: String(rotation) });
 
   it('extends only the contract version, preserving the original script oracle', () => {
@@ -590,7 +590,7 @@ describe('public wordplay geometry and rule-owned poses', () => {
     view = move(store, view, 30, 78, 90);
     view = move(store, view, 88.125, 9.625, 90);
     expect(view.wordPlay).toEqual({ x: 88.125, y: 9.625, rotation: 90, effect: 'none', discovered: ['ten', 'bridge', 'equal'] });
-    const restored = JSON.parse(JSON.stringify(store)) as AuthoredStore;
+    const restored = JSON.parse(JSON.stringify(store)) as GameStore;
     expect(readBranch(restored, view.runId, view.branchId)).toEqual(view);
     assertRejected(store, () => turn(store, view, 'finish_wordplay'));
     view = move(store, view, 5, 95, 0);
@@ -649,7 +649,7 @@ describe('public wordplay geometry and rule-owned poses', () => {
     const first = move(store, view, 28, 25, 0);
     const second = move(store, first, 70, 50, 90);
     const ended = turn(store, second, 'finish_wordplay');
-    const restored = JSON.parse(JSON.stringify(store)) as AuthoredStore;
+    const restored = JSON.parse(JSON.stringify(store)) as GameStore;
     const fork = forkBranch(restored, ended.runId, ended.branchId, ended.checkpoints[1].id, 'pose-fork');
     expect(fork.wordPlay).toEqual(first.wordPlay);
     expect(fork.visibleEvents).toEqual(first.visibleEvents);
@@ -793,7 +793,7 @@ describe('office free input is a visible-recipient local record, never a live NP
     const first = submitTurn(store, view.runId, view.branchId, request);
     const second = turn(store, first, 'answer_call');
     const third = turn(store, second, 'free_dialogue', { ...message, target: 'old_lead', channel: 'phone' });
-    const restored = JSON.parse(JSON.stringify(store)) as AuthoredStore;
+    const restored = JSON.parse(JSON.stringify(store)) as GameStore;
     expect(readBranch(restored, third.runId, third.branchId)).toEqual(third);
     const before = JSON.stringify(restored);
     expect(submitTurn(restored, view.runId, view.branchId, request)).toEqual(first);

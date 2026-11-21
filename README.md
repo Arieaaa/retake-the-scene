@@ -2,7 +2,7 @@
 
 一款为 **2026 Qoder 高校创造力大赛 · LifeHack** 设计的原创互动短剧游戏。玩家从片单选一部戏，穿进配角，在关键时刻接管大屏、发一条消息，或亲自面对那只一定会冲你哈气的圆头耄耋。演完可以倒带，看看同一句话说给不同的人听，事情会怎样变化。
 
-**当前进度**为 A 本地玩法改造与 B 接口交接阶段。旧版五集固定路径曾通过78项单测与91项浏览器检查，但用户复核确认其仍偏向选项播放器，不能作为自由NPC与独立交互玩法的完成证据。本轮增加满视口沉浸、扣 1 可移动文字样板和职场独立自由表达入口；真实NPC回应与托管存档尚未接入，其他剧本的独立玩法、公开版本抽检和线上盲玩仍待完成。原始15条结局样例保留为回归，不是玩法的全部边界。
+**当前进度（2026-11-21）**：B 已基于 A 的沉浸舞台交付本地可信后端基础，五剧原15结局、文字摆放与倒带可通过真实 HTTP + SQLite 游玩；匿名会话、所有者校验、幂等与条件写已接入。Sites Function 打包与私有数据库适配器已准备，但尚未部署或验证云端数据库；实时 NPC 仍未接入，站点模式不开放自由表达能力，也不把预写对白标为 live。其余独立玩法、公开版抽检和线上盲玩仍待完成，原15条结局不是玩法的全部边界。
 
 ## 从哪里开始
 
@@ -27,6 +27,17 @@
 
 A 负责舞台、内容和玩家体验，B 负责服务端、角色运行与部署。双方先联调婚礼篇的私下看片场景，再接入其余四部。正式目标是匿名访客可在 Qoder Sites 完整游玩五部短剧。项目接口、账号能力探针和发布验收见工程实现稿。
 
+## B 服务端基础（2026-11-21）
+
+个人分支 `codex/b-server-foundation` 基于 A 的 `259c8e2`，不修改主分支。服务端复用原剧包规则，原验收 JSON 未改；本机作者模式继续使用同一纯规则引擎，但正式前端构建禁止包含 `server/`、`content/` 和 `fixtures/` 模块。
+
+- 先以 `POST /api/session` 建立匿名 HttpOnly 会话，再以原 `createKey` 建局；浏览器不持有或上传可信游戏状态。生产 Cookie 使用 `__Host-`、Secure、SameSite=Lax，数据库只存令牌摘要；仅 loopback 开发使用非 Secure 的独立 Cookie 名。
+- 每局存档的分支、检查点和原始请求回执一起提交，数据库按所有者和存档版本条件写。重复创建、回合、倒带返回原回执，异参同号或旧 revision 返回409；读档、轮询、已完成回合的 fallback 不写入。
+- 五剧原路径与 `move_one` / `finish_wordplay` 已由服务端裁决；引用和转发必须显式指向当前可见事件。没有真实 Agent 时省略 `freePlay`，拒绝 `free_dialogue`，不模拟202或实时NPC。
+- 会话与存档14天到期；单局最多16分支、单分支64次成功回合、文档2 MiB。容量拒绝不改变旧记录；版本不支持则明确拒绝，不用新规则重写旧档。上线前仍需补齐频控、总配额与过期清理。
+
+本轮206项单测通过，包含58项真实 handler + SQLite 集成检查和42项存储检查；原105项浏览器回归（53作者/UI、52模拟站点，2.5分钟）全部通过，另有3项无接口拦截的 Chrome 联调检查通过。`build:site`、`build:authored`、`build:function` 和类型检查通过。云端 CAS、Cookie/Origin 网关转发、Deno 实际运行、QCA 双角色与公开发布均未验收，详见 [B 交接记录](./docs/AB-HANDOFF.md#b-服务端基础2026-11-21)。
+
 ## 沉浸与新玩法样板
 
 选剧时申请浏览器全屏，拒绝或不支持时仍以满视口舞台游玩；分享直达和刷新不强行请求全屏。舞台、对白各自滚动，顶栏可退出、静音、倒带或暂停。退出浏览器全屏不会离开剧本；暂停不取消已提交的后台回合。
@@ -39,10 +50,21 @@ A 负责舞台、内容和玩家体验，B 负责服务端、角色运行与部�
 
 ## 本地开发与 A/B 联调
 
+后端本地运行需要 Node.js 22.13+（或24；本轮实测22.23.2），使用内置 `node:sqlite`，实验性提示不影响本轮测试。
+
 ```sh
 npm ci
+# A 作者预演：浏览器本机存档
 npm run dev
+# B 真实本地后端：站点模式 + SQLite，默认同样占用5173，不要与上项同时运行
+npm run dev:site
+# 可选：RETAKE_PORT=5176 npm run dev:site
+# 存档默认位于被忽略的 .server-data/game.sqlite，可用 RETAKE_DB_PATH 指定路径
 npm test
+npm run test:backend
+PLAYWRIGHT_CHANNEL=chrome npm run test:backend:e2e
+# 仅准备 Function 交付包 dist-function/，不上传、不迁移、不部署
+npm run build:function
 # 默认站点发布产物 dist-site/，含预演数据排除门禁
 npm run build
 npm run preview
@@ -58,7 +80,7 @@ PLAYWRIGHT_CHANNEL=chrome CAPTURE_EVIDENCE=1 npm run test:e2e
 
 [本机素材归档](./docs/evidence/) 共34张：本次新增职场横竖屏、文字手机舞台和实际下载封面4张；保留旧版15结局、3种片单尺寸、4张下载封面、5种固定交接状态、2张草稿/旧线弹窗及1张网恋转发确认页共30张。旧29张随 `9ef5b1e` 交付，转发图随 `9cefca7` 交付，本次未覆盖或重新归因。各批源码Git blob、采集命令、时间、尺寸与走读范围见 [素材来源记录](./docs/AB-HANDOFF.md#当前素材与来源)；不是实际手机、公开站点或Qoder开发过程证据。
 
-`npm run dev` 默认运行 **编剧预写 / 本机存档** 版本；这不是在线 Agent 或云端持久化验证。默认 `npm run build` 与 `npm run preview` 使用站点模式的 `dist-site/`，不会以 `dist/` 中的旧作者产物代替；B真实接口未接入时仍会明确报错，不自动切回预演。A/B 状态预览为 `/#/preview/ready`、`pending`、`consent`、`ended`、`rewind`；这些固定视图不写入本机存档。
+`npm run dev` 默认运行 **编剧预写 / 本机存档** 版本；这不是在线 Agent 或云端持久化验证。默认 `npm run build` 与 `npm run preview` 使用站点模式的 `dist-site/`，不会以 `dist/` 中的旧作者产物代替；静态预览不会启动 API，缺少同源 Function 时明确报错，不自动切回预演；需要真实本地 API 请使用 `npm run dev:site`。A/B 状态预览为 `/#/preview/ready`、`pending`、`consent`、`ended`、`rewind`；这些固定视图不写入本机存档。
 
 已知剧目的存档恢复失败时，可以显式“另开一局”；不会自动替换或删除旧存档，只有创建成功才更新上次游玩位置。创建响应丢失后，重试沿用同一 `createKey`；倒带失败会退出弹窗并保留检查点与 `forkKey` 供原操作重试。切页后，创建、回合续查、重试、预写、倒带和分支对照的迟到响应不会覆盖新页面与游玩位置。
 
@@ -90,7 +112,7 @@ RETAKE_LIVE_ALLOW_WRITES=1 PLAYWRIGHT_CHANNEL=chrome npm run test:live
 
 **当前真实站点验收未完成。** 仅确认6项检查可被发现、缺少地址/许可会拒绝、作者预演会被门禁拦截；完整成功路径仍待 B 的真实候选地址。这6项未计入本机105项通过记录，也不能替代真实双角色、并发原子写、线上盲玩与发布证据。
 
-`src/` 为 A 前端与两个传输适配器，`shared/contracts/` 为待 B 复核的契约 v1.1，`content/episodes/` 与 `fixtures/` 为作者剧包及本地预演，`public/art/` 与 `public/sound/` 为原创素材，`tests/` 保存原始 15 路径、状态与界面验证。海报可用 `node scripts/export-art.mjs` 再生；哈气可用 `python3 scripts/create-sound.py` 再生。
+`src/` 为 A 前端与两个传输适配器，`shared/contracts/` 为契约 v1.1，`content/episodes/` 为作者剧包，`fixtures/` 保留固定预览；原作者引擎已迁至 `server/game/engine.ts` 供后端与本机作者模式共用。`server/api/` 与 `server/store/` 提供可信 API 和持久化，`functions/` 是 Sites 入口，`dev/` 是本地联调服务，`tests/server/` 区分存储/API检查与真实HTTP浏览器联调。`public/art/` 与 `public/sound/` 为原创素材，`tests/` 保留原15路径、状态与界面验证。海报可用 `node scripts/export-art.mjs` 再生；哈气可用 `python3 scripts/create-sound.py` 再生。
 
 A 首批已验收源码提交为 `6eb9032`，已交付到 `origin/codex/a-playable-platform`；谢幕顺序、首改动引用及29张素材已随 `9ef5b1e` 推送，网恋转发预览及1张确认截图已随 `9cefca7` 推送。默认站点构建和五集慢任务至分享的浏览器验收已随 `ca605ab` 推送。本次沉浸与玩法改造沿同一工作分支交付，实测结果与剩余缺项见交接记录。`main` 尚未合入 A 代码。B 请从工作分支取用源码、剧包、截图和交接文档，按文档先联调婚礼。
 

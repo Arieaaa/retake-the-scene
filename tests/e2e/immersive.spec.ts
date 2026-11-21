@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { PlayerView, TurnInput } from '../../shared/contracts';
 import { episodes } from '../../content/episodes';
-import { createRun, emptyStore, submitTurn } from '../../fixtures/authored-engine';
+import { createRun, emptyStore, submitTurn } from '../../server/game/engine';
 
 async function savedState(page: Page): Promise<PlayerView> {
   return page.evaluate(() => {
@@ -139,6 +139,7 @@ test('站点模拟：自由台词原文与频道透传，失败重试仍为同�
   const inputs: TurnInput[] = [];
   const text = '我拒绝照稿念。请解释系统的夜班费归谁，或者让系统本人来回答。';
   await page.route('**/functions/v1/app/api/**', async route => {
+    if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
     if (route.request().url().endsWith('/episodes')) return route.fulfill({ json: episodes });
     if (route.request().method() === 'POST' && route.request().url().endsWith('/turns')) {
       const input = route.request().postDataJSON() as TurnInput;
@@ -170,7 +171,7 @@ test('站点模拟：自由台词原文与频道透传，失败重试仍为同�
 test('站点模拟：未声明自由接戏能力时不伪造在线输入入口', async ({ page }) => {
   const initial = createRun(emptyStore(), 'office', 'without-capability');
   delete initial.freePlay;
-  await page.route('**/functions/v1/app/api/**', route => route.fulfill({ json: route.request().url().endsWith('/episodes') ? episodes : initial }));
+  await page.route('**/functions/v1/app/api/**', route => route.fulfill({ json: route.request().url().endsWith('/session') ? { ok: true } : route.request().url().endsWith('/episodes') ? episodes : initial }));
   await page.goto('http://127.0.0.1:5174/#/episode/office');
   await expect(page.locator('.capability-note')).toContainText('尚未开放自由接戏');
   await expect(page.getByRole('form', { name: '自由接戏' })).toHaveCount(0);

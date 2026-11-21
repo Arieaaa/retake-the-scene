@@ -1,6 +1,6 @@
 import { expect, test, type Route } from '@playwright/test';
 import { episodes } from '../../content/episodes';
-import { createRun, emptyStore, readBranch, submitTurn } from '../../fixtures/authored-engine';
+import { createRun, emptyStore, readBranch, submitTurn } from '../../server/game/engine';
 import { previewViews } from '../../fixtures/public/views';
 import acceptance from '../../五剧十五结局-验收样例.json' with { type: 'json' };
 import type { EpisodeId, PlayerView, TurnInput } from '../../shared/contracts';
@@ -23,6 +23,7 @@ test('站点模拟：503不切换预演，原操作重试可恢复片单', async
 
 test('站点模拟：片单响应不能清掉存档404，预览地址不可访问样例', async ({ page }) => {
   await page.route(api, async route => {
+    if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
     if (route.request().url().endsWith('/episodes')) {
       await new Promise(resolve => setTimeout(resolve, 150));
       await route.fulfill({ json: episodes });
@@ -47,6 +48,7 @@ for (const reference of ['visible', 'missing', 'unknown'] as const) {
     let current = ended;
     const writes: string[] = [];
     await page.route(api, async route => {
+      if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
       if (route.request().method() !== 'GET') writes.push(route.request().method());
       await route.fulfill({ json: route.request().url().endsWith('/episodes') ? episodes : current });
     });
@@ -100,6 +102,7 @@ for (const status of ['ready', 'pending', 'ended'] as const) {
     }
     const writes: string[] = [];
     await page.route(api, async route => {
+      if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
       if (route.request().method() !== 'GET') writes.push(route.request().method());
       if (route.request().url().endsWith('/episodes')) await route.fulfill({ json: episodes });
       else if (route.request().url().includes('/turns/')) await route.fulfill({ status: 202, json: { requestId: view.activeRequest!.requestId, status: 'pending', pollUrl: '' } });
@@ -141,6 +144,7 @@ test('站点模拟：引用草稿只认当前可见楼层，取消零写入、�
   let current = ready;
   const inputs: TurnInput[] = [];
   await page.route(api, async route => {
+    if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/episodes')) return route.fulfill({ json: episodes });
     if (path.endsWith('/turns')) {
@@ -184,6 +188,7 @@ for (const channel of ['soda', 'coach']) {
     let current = ready;
     const inputs: TurnInput[] = [];
     await page.route(api, async route => {
+      if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith('/episodes')) return route.fulfill({ json: episodes });
       if (path.endsWith('/turns')) {
@@ -265,6 +270,7 @@ test('站点模拟：首拍旧线入口和对照只读取，不生成回合或�
   ready.checkpoints = [];
   const writes: string[] = [];
   await page.route(api, async route => {
+    if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
     if (route.request().method() !== 'GET') writes.push(route.request().url());
     const path = new URL(route.request().url()).pathname;
     return route.fulfill({ json: path.endsWith('/episodes') ? episodes : path.endsWith(old.branchId) ? old : ready });
@@ -289,6 +295,7 @@ for (const status of [404, 409, 503]) {
       let reads = 0;
       await page.addInitScript(saved => localStorage.setItem('retake.progress.site', JSON.stringify(saved)), saved);
       await page.route(api, async route => {
+        if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
         const request = route.request();
         const path = new URL(request.url()).pathname;
         if (request.method() !== 'GET') writes.push(path);
@@ -329,6 +336,7 @@ test('站点模拟：另开响应丢失后沿用createKey，成功前保留旧�
   const creates: { episodeId: string; createKey: string }[] = [];
   await page.addInitScript(saved => localStorage.setItem('retake.progress.site', JSON.stringify(saved)), saved);
   await page.route(api, async route => {
+    if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/episodes')) return route.fulfill({ json: episodes });
     if (path.endsWith('/api/runs')) {
@@ -355,6 +363,7 @@ test('站点模拟：另开期间回片单，迟到响应不覆盖路由或旧�
   const pending = new Promise<void>(resolve => { release = resolve; });
   await page.addInitScript(saved => localStorage.setItem('retake.progress.site', JSON.stringify(saved)), saved);
   await page.route(api, async route => {
+    if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/episodes')) return route.fulfill({ json: episodes });
     if (path.endsWith('/api/runs')) {
@@ -364,12 +373,12 @@ test('站点模拟：另开期间回片单，迟到响应不覆盖路由或旧�
     return route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '旧存档暂不可恢复', retryable: false } });
   });
   await page.goto(`${origin}/#/episode/wedding`);
-  const request = page.waitForRequest(request => request.method() === 'POST');
+  const request = page.waitForRequest(request => request.method() === 'POST' && request.url().endsWith('/api/runs'));
   await page.getByRole('button', { name: '另开一局', exact: true }).click();
   await request;
   await page.getByRole('button', { name: '退出舞台', exact: true }).click();
   await expect(page.locator('.poster-card')).toHaveCount(5);
-  const response = page.waitForResponse(response => response.request().method() === 'POST');
+  const response = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/api/runs'));
   release();
   await response;
   await expect(page.locator('.play-page')).toHaveCount(0);
@@ -381,6 +390,7 @@ test('站点模拟：倒带失败显示错误，重试保留检查点与forkKey'
   const after = structuredClone(previewViews.rewind);
   const forks: { checkpointId: string; forkKey: string }[] = [];
   await page.route(api, async route => {
+    if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/episodes')) return route.fulfill({ json: episodes });
     if (path.endsWith('/forks')) {
@@ -425,6 +435,7 @@ for (const operation of ['turn202', 'turn409', 'retry-read', 'fallback', 'fork',
         return route.fulfill(outcome === 'success' ? { json: previewViews.rewind } : { status: 503, json: { code: 'LATE_ERROR', message: '旧局迟到的错误', retryable: true } });
       }
       await page.route(api, async route => {
+        if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
         const path = new URL(route.request().url()).pathname;
         if (path.endsWith('/episodes')) return route.fulfill({ json: episodes });
         if (path.includes('/other-run/')) return route.fulfill({ json: other });
@@ -488,6 +499,7 @@ for (const responseStatus of [200, 202]) {
     let polls = 0;
     const text = '我想说：<b>请你亲手确认署名</b>。';
     await page.route(api, async route => {
+      if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith('/episodes')) return route.fulfill({ json: episodes });
       if (path.endsWith('/turns')) {
@@ -564,6 +576,7 @@ for (const caseId of ['wedding-01', 'office-01', 'romance-02', 'hiss-01', 'reply
       return next;
     };
     const handler = async (route: Route) => {
+      if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
       const request = route.request();
       const path = new URL(request.url()).pathname;
       const method = request.method();
@@ -881,6 +894,7 @@ test('站点模拟：断网后重试保留requestId与玩家原选择', async ({
   let fail = true;
   const inputs: TurnInput[] = [];
   await page.route(api, async route => {
+    if (route.request().url().endsWith('/session')) return route.fulfill({ json: { ok: true } });
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/episodes')) return route.fulfill({ json: episodes });
     if (path.endsWith('/api/runs')) return route.fulfill({ json: ready });

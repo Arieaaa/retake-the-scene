@@ -20,7 +20,15 @@ export function createSiteTransport(base = '/functions/v1/app'): GameTransport {
   return {
     mode: 'site',
     catalog: () => request<EpisodeSummary[]>('/api/episodes'),
-    create: (episodeId: EpisodeId, createKey: string) => request<PlayerView>('/api/runs', { episodeId, createKey }),
+    create: async (episodeId: EpisodeId, createKey: string) => {
+      const create = async () => {
+        const session = await request<{ ok: boolean }>('/api/session', {});
+        if (session?.ok !== true) throw new GameError('INVALID_RESPONSE', '访客会话没有建立，请重试原操作。', true, 503);
+        return request<PlayerView>('/api/runs', { episodeId, createKey });
+      };
+      return typeof navigator !== 'undefined' && navigator.locks
+        ? navigator.locks.request('retake.site-session', create) : create();
+    },
     read: (r, b) => request<PlayerView>(branch(r, b)),
     turn: (r, b, input: TurnInput) => request<PlayerView | AcceptedTurn>(`${branch(r, b)}/turns`, input),
     poll: (r, b, id) => request<PlayerView | AcceptedTurn>(`${branch(r, b)}/turns/${encodeURIComponent(id)}`),

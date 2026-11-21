@@ -1,6 +1,63 @@
 # A/B 交流与交接
 
-更新时间：2026-11-20（北京时间）。当前工作分支：`codex/a-playable-platform`。A 负责玩家体验与剧包，B 负责可信服务端、云角色、存储和最终发布。此文档随可验证交付回填；未实测不能写通过。
+更新时间：2026-11-21（北京时间）。B 工作分支：`codex/b-server-foundation`，基于 A 的 `codex/a-playable-platform` / `259c8e2`。A 负责玩家体验与剧包，B 负责可信服务端、云角色、存储和最终发布。下文11月19–20日记录保留为A历史基线，当前B状态以上方新增记录与B待办表为准；未实测不能写通过。
+
+## B 服务端基础（2026-11-21）
+
+本轮范围是本地开发并交付个人分支，不合入main、不创建PR、不配置云资源、不发布站点、不调用QCA。契约1.1、剧包1.0.0及原15条验收JSON保留。
+
+### 已实现的边界
+
+- `server/game/engine.ts` 从原作者引擎迁入，固定规则不改；`GameService` 在服务端裁决原五剧路径、文字姿态/效果/谢幕、引用和转发、分支检查点与所有者权限。`PlayerView` 不带完整剧包、未来结局或Cookie摘要。
+- 每局一个权威文档，含分支、检查点、创建/回合/倒带的原始回执；`retake_runs.version` 是跨分支存档CAS版本，与单分支`revision`分开。创建依赖`(owner_hash,create_key)`唯一约束；条件写在数据库语句本身检查id、owner和version，不依赖内存锁。
+- `server/store/sqlite.ts` 使用真实SQLite/WAL；两独立连接竞争及关闭重开恢复已测。`server/store/sites.ts` 使用运行时注入的function_backend SDK，单测确认查询条件与异常边界；这不是托管数据库原子性证明。
+- 数据库结果不明时返回脱敏503，不在适配器或业务层重发写入。仅明确零行的CAS冲突可重新读取后裁决；显式重试沿用原操作ID。已注入“实际提交后丢失数据库回执”，确认创建、回合、倒带均可取回原回执且不二次写入。
+- 匿名会话由服务端随机生成32字节令牌，只存SHA-256摘要，14天到期。生产为`__Host-retake_visitor; Secure; HttpOnly; SameSite=Lax; Path=/`；loopback开发使用独立Cookie名。写接口校验固定Origin、跨站Fetch元数据、JSON类型和8 KiB流式正文上限。
+- 所有存档读取与写入均要求有效访客且查询包含owner；未知/越权/到期存档统一404。跨Cookie、跨局猜分支、回合回执、fallback和fork均覆盖。客户端不能指定owner；建局前未握手返回401。
+- 单局16分支、单分支64个成功回合、文档2 MiB；超限429且旧记录不变，仍能读档和重放已有回执。不同scriptVersion或stateVersion不解释成当前版本；当前只有1.0.0规则，并非多版本注册表。
+- `freePlay` 在全部服务端投影及历史回执中省略，`free_dialogue` 返回422 `AGENT_UNAVAILABLE`。固定规则同步返回200，不假造202或live。`move_one`/`finish_wordplay` 已接入；本轮没有开发真实NPC或改写原始15条样例。
+
+### HTTP 与前端接入
+
+业务路径统一挂在`/functions/v1/app`；handler亦识别运行时的`/app`及`app-d<32位hex>`物理前缀，浏览器不切换到物理地址。
+
+| 接口 | 结果与恢复语义 |
+|---|---|
+| `GET /api/episodes` | 匿名公开摘要，不创建会话、不包含完整剧包 |
+| `POST /api/session`，正文`{}` | 建立或复用HttpOnly会话，返回`{ok:true}`；必须先于建局 |
+| `POST /api/runs` | 新建201，原createKey重放200；初始视图与建局一起落盘 |
+| `GET /api/runs/:run/branches/:branch` | 只读当前投影；可选afterEventId，未知游标全量且reset=true |
+| `POST .../turns` | TurnInput条件写，成功200；异参同号或旧revision为409 |
+| `GET .../turns/:requestId` / `POST .../turns/:requestId/fallback` | 只返回已落盘原回执；不存在404；fallback正文`{}`，本轮没有异步任务可切换 |
+| `POST .../forks` | 新分支201，原forkKey重放200；共同前缀保留，未来授权/道具/回执不继承 |
+
+`src/transport/site.ts` 已加入session→create握手；支持Web Locks时按同源串行建局，防止首次并发建立不同身份。会话失败不发送建局，原createKey不变。无Web Locks的首次跨标签竞争仍需另行验证；过期/清除Cookie不承诺恢复原访客存档。网恋转发和扣1引用必须显式传当前事件ID，不使用作者模式自动选择引用的便捷路径。
+
+### 本地验证与运行
+
+Node.js 22.23.2、已安装Chrome；Node内置SQLite会输出实验性提示。`npm run dev:site` 在loopback同时提供站点UI与真实API，默认5173和`.server-data/game.sqlite`；`RETAKE_PORT`/`RETAKE_DB_PATH`可覆盖，测试使用独立5175端口和内存SQLite，不污染开发存档。不要将Vite开发服务用于公开托管。
+
+```sh
+npm test
+# 206项通过：原引擎86、作者传输7、站点传输11、对照2、存储42、真实API58
+npm run build:site && npm run build:authored && npm run build:function
+# 三种产物及类型检查通过；站点fixtureChunks/fixtureMarkers为空
+PLAYWRIGHT_CHANNEL=chrome npm run test:e2e
+# 原105项全部通过（2.5分钟）：53作者预演/UI，52模拟站点
+PLAYWRIGHT_CHANNEL=chrome npm run test:backend:e2e
+# 3项真实HTTP浏览器联调通过，无page.route模拟，非云端或实体手机证明
+```
+
+真实API58项直接读取未改15条样例并核对结局、关键事件、因果和revision，另含Cookie/Origin/输入边界、幂等竞争、倒带、只读回执、特殊动作、未知写结果、存档限额和不支持版本。浏览器3项覆盖婚礼署名→刷新→授权前倒带→旧线、独立访客拒绝访问/HttpOnly、文字键盘落位→刷新→主动谢幕、无真实NPC时不展示自由能力。原A全量浏览器测试仍单独执行，不将52项模拟站点检查算成真实后端证据。
+
+### 云端交付前仍需完成
+
+- `dist-site/`只含线上前端；`dist-function/`仅含`index.ts`和`game.mjs`，不携带SQLite、本机localStorage或预演样例。Sites注入`./_qoder/backend.mjs`，不能自行创建/复制该SDK目录；`server/store/schema.sql`只是待审阅DDL，未应用迁移或权限策略。
+- 服务端需配置`RETAKE_SITE_ORIGIN`为部署站点精确HTTPS origin（无路径或末尾斜杠）；缺失时入口明确503。还需实测平台Cookie、Origin转发、函数路由及两访客隔离；目前没有Deno运行环境，不能把TypeScript/打包成功当运行验证。
+- 在授权的function_backend上迁移两张私有表，并验证真实数据库唯一约束、并发CAS、未知写结果、RLS/权限与数据恢复；本地SDK链式调用测试不能替代这些探针。
+- 补齐会话/建局频控、总存储配额与过期清理，再考虑公开发布。增加新剧包前提供旧版本加载方案；当前对不支持的版本只做安全拒绝。
+- 真实双角色、角色知识隔离、持久任务/调度、202轮询、预写与迟到QCA回复的最多一次提交及用量证据仍未实现。QCA启用及平台PAT创建/使用需单独确认，本轮未申请或调用。
+- 真实候选地址、实体手机、盲玩、过程材料与投稿继续待办；本轮不更新A历史截图或将其重新归因到B代码。
 
 ## 玩法修订：独立交互与沉浸体验（2026-11-20）
 
@@ -149,13 +206,13 @@ npm test && npm run build:authored && PLAYWRIGHT_CHANNEL=chrome npm run test:e2e
 
 | B 交付 | 当前证据 | 下一步 |
 |---|---|---|
-| 匿名会话 / HttpOnly Cookie / 所有者校验 | 本分支未接入，未取得真实验证证据 | 提供真实服务端入口与脱敏成功/404响应 |
-| 分支条件写、回合幂等、并发只成功一次 | 未验证 | 提供数据库原子更新探针与事件记录 |
-| 开局 / 倒带幂等、旧局保留 | 服务端未验证 | 同一所有者重复 createKey 只产生同一局，同一 run 重复 forkKey 只产生同一分支；创建完成但响应丢失后重试可读同一结果；新局成功后旧局及旧分支仍可按原地址读取 |
-| 两角色可见性与真实 Cloud Agents | 未验证 | 分角色投影，提供真实运行标识、输入/来源/时延/用量 |
-| 1.1自由NPC与特殊动作 | A本机契约/入口/规则已验证，B未接入 | 真实free_dialogue须根据原文、角色知识及频道回应，不只关键词选选项；move_one/finish_wordplay须服务端重算，位置/发现/自由事件都参加原子回合与检查点恢复 |
-| 超时 / 预写竞争 / 刷新恢复 | 未验证 | 提供 202→200、503、安全重试与迟到云回复测试 |
-| 站点所有者、套餐、公开发布 | 未确认 | 由 B 按协作规范决定正式发布身份与版本 |
+| 匿名会话 / HttpOnly Cookie / 所有者校验 | 真实本地API与独立浏览器上下文已验证；生产Cookie属性由Fetch测试确认 | 实测Sites HTTPS网关、Cookie和Origin转发及双访客隔离 |
+| 分支条件写、回合幂等、并发只成功一次 | SQLite真实条件写/双连接、同revision竞争、同号重试已测；Sites适配器仅SDK模拟 | 在托管数据库验证原子CAS、唯一约束和未知结果恢复 |
+| 开局 / 倒带幂等、旧局保留 | 本地已验证原回执重放、丢回执恢复、未来授权不继承与旧线回读 | 云端复验；增加剧包版本前提供旧版本加载方案 |
+| 两角色可见性与真实 Cloud Agents | 未接入，不声明live | 分角色投影、持久任务协调和真实运行标识、输入/来源/时延/用量 |
+| 1.1自由NPC与特殊动作 | move_one/finish_wordplay已由服务端重算并持久化；freePlay省略，free_dialogue明确拒绝 | 实现真实自由NPC后再投影能力，不以作者回执替代角色回应 |
+| 超时 / 预写竞争 / 刷新恢复 | 同步回合刷新、503和未知写结果的原请求恢复已测 | 真实202任务、预写/迟到云回复竞争及断网关页恢复尚缺 |
+| 站点所有者、套餐、公开发布 | 本轮只交付本地代码与个人分支，未分配资源或发布 | 确认发布身份；完成频控/总配额/清理、云端探针与候选版签收 |
 
 ## 本轮过程与平台证据
 

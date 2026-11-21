@@ -1,6 +1,6 @@
-import { GameError, SCRIPT_VERSION, type Checkpoint, type Choice, type EpisodeId, type FreePlay, type PlayerView, type TurnInput, type VisibleEvent, type WordPlay } from '../shared/contracts';
-import { wordEffect } from '../shared/wordplay';
-import { episodePackages, replyTargets, type AuthoredAction, type AuthoredLine, type EpisodePackage } from '../content/episodes';
+import { GameError, SCRIPT_VERSION, type Checkpoint, type Choice, type EpisodeId, type FreePlay, type PlayerView, type TurnInput, type VisibleEvent, type WordPlay } from '../../shared/contracts';
+import { wordEffect } from '../../shared/wordplay';
+import { episodePackages, replyTargets, type AuthoredAction, type AuthoredLine, type EpisodePackage } from '../../content/episodes';
 
 // Plain JSON state. No timers, network, microphone, executable scripts or live actors.
 type BranchState = Omit<PlayerView, 'checkpoints' | 'branches'>;
@@ -19,12 +19,12 @@ interface AuthoredRun {
   branches: Record<string, AuthoredBranch>;
   forkKeys: Record<string, SavedRequest>;
 }
-export interface AuthoredStore {
+export interface GameStore {
   runs: Record<string, AuthoredRun>;
   createKeys: Record<string, SavedRequest>;
 }
 
-export function emptyStore(): AuthoredStore { return { runs: {}, createKeys: {} }; }
+export function emptyStore(): GameStore { return { runs: {}, createKeys: {} }; }
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const uuid = () => crypto.randomUUID();
 const key = (value: string) => JSON.stringify(value);
@@ -36,7 +36,7 @@ const causes = (...ids: (string | undefined)[]) => [...new Set(ids.filter((id): 
 function validKey(value: unknown, label: string): asserts value is string {
   if (typeof value !== 'string' || !value.trim() || value.length > 128) invalid(`${label} 必须是 1–128 字符的非空字符串。`);
 }
-function getRun(store: AuthoredStore, runId: string): AuthoredRun {
+function getRun(store: GameStore, runId: string): AuthoredRun {
   const run = own(store.runs, runId);
   if (!run) throw new GameError('NOT_FOUND', '找不到这场演出。', false, 404);
   return run;
@@ -149,7 +149,7 @@ function initialState(episodeId: EpisodeId, runId: string, branchId: string): Br
   return state;
 }
 
-export function createRun(store: AuthoredStore, episodeId: EpisodeId, createKey: string): PlayerView {
+export function createRun(store: GameStore, episodeId: EpisodeId, createKey: string): PlayerView {
   validKey(createKey, 'createKey');
   if (!Object.hasOwn(episodePackages, episodeId)) invalid('未知剧目。');
   const fingerprint = JSON.stringify({ episodeId });
@@ -166,7 +166,7 @@ export function createRun(store: AuthoredStore, episodeId: EpisodeId, createKey:
   store.createKeys[key(createKey)] = { fingerprint, result: copy(result) };
   return result;
 }
-export function readBranch(store: AuthoredStore, runId: string, branchId: string): PlayerView {
+export function readBranch(store: GameStore, runId: string, branchId: string): PlayerView {
   const run = getRun(store, runId);
   return viewOf(run, getBranch(run, branchId));
 }
@@ -576,7 +576,7 @@ function specialTurn(state: BranchState, input: TurnInput, valid: SpecialAction)
   emit(state, 'wordplay_ended', 'word_rules', `${state.ending.text}\n${state.ending.line}`, groupAudience, 'group', [root.eventId], 'rules', '文字规则');
 }
 
-export function submitTurn(store: AuthoredStore, runId: string, branchId: string, input: TurnInput): PlayerView {
+export function submitTurn(store: GameStore, runId: string, branchId: string, input: TurnInput): PlayerView {
   validateInput(input);
   const run = getRun(store, runId), branch = getBranch(run, branchId);
   const fingerprint = fingerprintOf(input), saved = own(branch.requests, key(input.requestId));
@@ -616,7 +616,7 @@ export function submitTurn(store: AuthoredStore, runId: string, branchId: string
   run.branches[branchId] = next;
   return result;
 }
-export function forkBranch(store: AuthoredStore, runId: string, branchId: string, checkpointId: string, forkKey: string): PlayerView {
+export function forkBranch(store: GameStore, runId: string, branchId: string, checkpointId: string, forkKey: string): PlayerView {
   validKey(forkKey, 'forkKey');
   const run = getRun(store, runId), branch = getBranch(run, branchId);
   const fingerprint = JSON.stringify({ branchId, checkpointId }), saved = own(run.forkKeys, key(forkKey));

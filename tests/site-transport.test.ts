@@ -4,6 +4,33 @@ import { GameError } from '../shared/contracts';
 
 afterEach(() => vi.unstubAllGlobals());
 describe('B 同源 Function 边界', () => {
+  it('先确认匿名会话，再用原createKey建局', async () => {
+    const fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(Response.json(url.endsWith('/session') ? { ok: true } : { runId: 'r' })));
+    vi.stubGlobal('fetch', fetch);
+    await createSiteTransport().create('wedding', 'create-1');
+    expect(fetch.mock.calls.map(call => call[0])).toEqual(['/functions/v1/app/api/session', '/functions/v1/app/api/runs']);
+    expect(fetch).toHaveBeenLastCalledWith('/functions/v1/app/api/runs', expect.objectContaining({ body: JSON.stringify({ episodeId: 'wedding', createKey: 'create-1' }) }));
+  });
+  it('会话失败不抢先建局，重试保留createKey', async () => {
+    let fail = true;
+    const fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith('/session')) return Promise.resolve(fail ? Response.json({ code: 'SERVICE_UNAVAILABLE', retryable: true }, { status: 503 }) : Response.json({ ok: true }));
+      return Promise.resolve(Response.json({ runId: 'r' }));
+    });
+    vi.stubGlobal('fetch', fetch);
+    const transport = createSiteTransport();
+    await expect(transport.create('wedding', 'create-1')).rejects.toMatchObject({ status: 503 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    fail = false;
+    await transport.create('wedding', 'create-1');
+    expect(fetch).toHaveBeenLastCalledWith('/functions/v1/app/api/runs', expect.objectContaining({ body: JSON.stringify({ episodeId: 'wedding', createKey: 'create-1' }) }));
+  });
+  it('错误的会话成功载荷不当作已建立身份', async () => {
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(Response.json({ runId: 'not-a-session' })));
+    vi.stubGlobal('fetch', fetch);
+    await expect(createSiteTransport().create('office', 'create-2')).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
   it('提交携带同源 Cookie 且沿用 requestId，不把密钥交给浏览器', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ requestId: 'turn-7', status: 'pending', pollUrl: '/api/runs/r1/branches/b1/turns/turn-7' }), { status: 202 }));
     vi.stubGlobal('fetch', fetch);

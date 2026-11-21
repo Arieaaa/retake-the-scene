@@ -1,6 +1,6 @@
 import { SCRIPT_VERSION, type Choice, type Clue, type Ending, type EpisodeId, type EpisodeSummary, type Scene } from '../../shared/contracts';
 
-// Author-preview content only. The site catalog must project `episodes`, not these packages.
+// Full packages are server/author-preview only; the site catalog projects `episodes`.
 export interface AuthoredActor { id: string; name: string; channels: string[] }
 export interface AuthoredLine { actorId: string; actorName?: string; channel: string; audience: string[]; text: string; kind?: string }
 export interface AuthoredStage { scene: Scene; lines: AuthoredLine[] }
